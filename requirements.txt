@@ -1,0 +1,23 @@
+# Dependencias principales del bot de trading
+requests>=2.31.0
+numpy>=1.24.0
+pandas>=2.0.0
+matplotlib>=3.7.0
+mplfinance>=0.12.0
+flask>=2.3.0
+
+# Dependencias de desarrollo (opcional)
+# pytest>=7.0.0
+# black>=23.0.0
+# flake8>=6.0.0
+
+# Dependencias del sistema (para Render)
+# Estas ya están disponibles en el entorno de Render:
+# - Python 3.9+
+# - pip
+# - git
+
+# Notas de instalación:
+# 1. Instalar con: pip install -r requirements.txt
+# 2. Para Render, estas dependencias se instalan automáticamente
+# 3. El bot está optimizado para funcionar en entornos cloud como Render
