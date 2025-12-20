@@ -11,7 +11,7 @@ import logging
 from typing import List, Dict, Any, Optional
 from datetime import datetime
 
-from ..config.settings import config
+from ..config.settings import config, Constants
 
 class OptimizadorIA:
     """Optimizador de inteligencia artificial para parámetros de trading"""
