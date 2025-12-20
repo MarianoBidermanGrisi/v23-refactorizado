@@ -59,6 +59,7 @@ class ConfigSettings:
             # URLs de APIs
             self.binance_api_base = 'https://api.binance.com'
             self.binance_klines_endpoint = '/api/v3/klines'
+            self.binance_api_key = os.environ.get('BINANCE_API_KEY', '')
             self.telegram_api_base = f'https://api.telegram.org'
             
             # Configuración Flask
