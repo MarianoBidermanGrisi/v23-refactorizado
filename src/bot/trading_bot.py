@@ -17,7 +17,6 @@ from ..strategies.breakout_reentry import estrategia, CanalInfo, DatosMercado
 from ..strategies.optimizador_ia import optimizador_ia
 import csv # Explicitly added from context, as it's used but not in initial imports
 import matplotlib.pyplot as plt # Explicitly added from context
-import mplfinance as mpf # Explicitly added from context
 import pandas as pd # Explicitly added from context
 
 class TradingBot:
@@ -383,12 +382,12 @@ class TradingBot:
             self.logger.error(f"Error enviando alerta de breakout: {e}")
 
     def generar_grafico_breakout(self, symbol: str, canal_info: CanalInfo, datos_mercado: DatosMercado, tipo_breakout: str, config_optima: Dict[str, Any]) -> Optional[BytesIO]:
-        """Genera gráfico especial para el momento del breakout"""
+        """Genera gráfico especial para el momento del breakout usando matplotlib puro"""
         try:
             # Importar aquí para evitar problemas de dependencias
             import matplotlib.pyplot as plt
-            import mplfinance as mpf
             import pandas as pd
+            import matplotlib.patches as patches
 
             plt.rcParams['font.family'] = ['DejaVu Sans', 'Segoe UI Emoji', 'Apple Color Emoji', 'Noto Color Emoji']
 
@@ -421,34 +420,92 @@ class TradingBot:
                 resistencia_values.append(resist)
                 soporte_values.append(sop)
 
-            df['Resistencia'] = resistencia_values
-            df['Soporte'] = soporte_values
-
             # Marcar zona de breakout
             precio_breakout = datos_mercado.precio_actual
             breakout_line = [precio_breakout] * len(df)
             color_breakout = "#D68F01"
             titulo_extra = "🚀 RUPTURA ALCISTA" if tipo_breakout == Constants.BREAKOUT_LONG else "📉 RUPTURA BAJISTA"
 
-            # Preparar gráficos adicionales
-            apds = [
-                mpf.make_addplot(df['Resistencia'], color='#5444ff', linestyle='--', width=2, panel=0),
-                mpf.make_addplot(df['Soporte'], color="#5444ff", linestyle='--', width=2, panel=0),
-                mpf.make_addplot(breakout_line, color=color_breakout, linestyle='-', width=3, panel=0, alpha=0.8),
-            ]
+            # Crear gráfico con matplotlib puro
+            fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(14, 10), 
+                                         gridspec_kw={'height_ratios': [3, 1]}, 
+                                         facecolor='#1a1a1a')
 
-            # Crear gráfico
-            fig, axes = mpf.plot(df, type='candle', style='nightclouds',
-                                 title=f'{symbol} | {titulo_extra} | {config_optima["timeframe"]} | ⏳ ESPERANDO REENTRY',
-                                 ylabel='Precio',
-                                 addplot=apds,
-                                 volume=False,
-                                 returnfig=True,
-                                 figsize=(14, 10),
-                                 panel_ratios=(3, 1))
+            # Panel principal - Gráfico de velas
+            for i, (date, row) in enumerate(df.iterrows()):
+                open_price = row['Open']
+                high_price = row['High']
+                low_price = row['Low']
+                close_price = row['Close']
+                
+                # Color de la vela
+                color = '#00FF00' if close_price >= open_price else '#FF0000'
+                edge_color = '#FFFFFF' if close_price >= open_price else '#FF0000'
+                
+                # Cuerpo de la vela
+                body_height = abs(close_price - open_price)
+                body_bottom = min(open_price, close_price)
+                
+                # Dibujar cuerpo
+                rect = patches.Rectangle((i - 0.3, body_bottom), 0.6, body_height,
+                                       linewidth=1, edgecolor=edge_color, 
+                                       facecolor=color, alpha=0.8)
+                ax1.add_patch(rect)
+                
+                # Mecha superior
+                ax1.plot([i, i], [high_price, max(open_price, close_price)], 
+                        color=edge_color, linewidth=1)
+                
+                # Mecha inferior
+                ax1.plot([i, i], [low_price, min(open_price, close_price)], 
+                        color=edge_color, linewidth=1)
 
+            # Agregar líneas del canal
+            ax1.plot(tiempos_reg, resistencia_values, color='#5444ff', 
+                    linestyle='--', linewidth=2, label='Resistencia', alpha=0.8)
+            ax1.plot(tiempos_reg, soporte_values, color='#5444ff', 
+                    linestyle='--', linewidth=2, label='Soporte', alpha=0.8)
+            
+            # Línea de breakout
+            ax1.plot(tiempos_reg, breakout_line, color=color_breakout, 
+                    linestyle='-', linewidth=3, label='Precio Breakout', alpha=0.9)
+
+            # Configurar ejes
+            ax1.set_title(f'{symbol} | {titulo_extra} | {config_optima["timeframe"]} | ⏳ ESPERANDO REENTRY', 
+                         color='white', fontsize=14, fontweight='bold')
+            ax1.set_ylabel('Precio', color='white')
+            ax1.grid(True, alpha=0.3)
+            ax1.legend(loc='upper left')
+            
+            # Configurar colores del panel principal
+            ax1.tick_params(colors='white')
+            ax1.spines['bottom'].set_color('white')
+            ax1.spines['top'].set_color('white')
+            ax1.spines['right'].set_color('white')
+            ax1.spines['left'].set_color('white')
+
+            # Panel de volumen
+            colors = ['#00FF00' if close >= open else '#FF0000' 
+                     for open, close in zip(df['Open'], df['Close'])]
+            ax2.bar(range(len(df)), df['Volume'], color=colors, alpha=0.7)
+            ax2.set_ylabel('Volumen', color='white')
+            ax2.set_xlabel('Tiempo', color='white')
+            ax2.tick_params(colors='white')
+            ax2.spines['bottom'].set_color('white')
+            ax2.spines['top'].set_color('white')
+            ax2.spines['right'].set_color('white')
+            ax2.spines['left'].set_color('white')
+
+            # Configurar fondo
+            fig.patch.set_facecolor('#1a1a1a')
+            
+            # Ajustar layout
+            plt.tight_layout()
+
+            # Guardar en buffer
             buf = BytesIO()
-            plt.savefig(buf, format='png', dpi=100, bbox_inches='tight', facecolor='#1a1a1a')
+            plt.savefig(buf, format='png', dpi=100, bbox_inches='tight', 
+                       facecolor='#1a1a1a', edgecolor='none')
             buf.seek(0)
             plt.close(fig)
             return buf
@@ -677,11 +734,12 @@ class TradingBot:
             self.logger.error(f"Error generando señal de operación: {e}")
 
     def generar_grafico_profesional(self, symbol: str, canal_info: CanalInfo, datos_mercado: DatosMercado, precio_entrada: float, tp: float, sl: float, tipo_operacion: str) -> Optional[BytesIO]:
-        """Genera gráfico profesional para señales"""
+        """Genera gráfico profesional para señales usando matplotlib puro"""
         try:
             import matplotlib.pyplot as plt
-            import mplfinance as mpf
             import pandas as pd
+            import matplotlib.patches as patches
+            
             plt.rcParams['font.family'] = ['DejaVu Sans', 'Segoe UI Emoji', 'Apple Color Emoji', 'Noto Color Emoji']
 
             config_optima = self.config_optima_por_simbolo.get(symbol)
@@ -717,34 +775,95 @@ class TradingBot:
                 resistencia_values.append(resist)
                 soporte_values.append(sop)
 
-            df['Resistencia'] = resistencia_values
-            df['Soporte'] = soporte_values
-
             # Niveles de entrada
             entry_line = [precio_entrada] * len(df)
             tp_line = [tp] * len(df)
             sl_line = [sl] * len(df)
 
-            apds = [
-                mpf.make_addplot(df['Resistencia'], color='#5444ff', linestyle='--', width=2, panel=0),
-                mpf.make_addplot(df['Soporte'], color="#5444ff", linestyle='--', width=2, panel=0),
-                mpf.make_addplot(entry_line, color='#FFD700', linestyle='-', width=2, panel=0),
-                mpf.make_addplot(tp_line, color='#00FF00', linestyle='-', width=2, panel=0),
-                mpf.make_addplot(sl_line, color='#FF0000', linestyle='-', width=2, panel=0),
-            ]
+            # Crear gráfico con matplotlib puro
+            fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(14, 10), 
+                                         gridspec_kw={'height_ratios': [3, 1]}, 
+                                         facecolor='#1a1a1a')
 
-            # Crear gráfico
-            fig, axes = mpf.plot(df, type='candle', style='nightclouds',
-                                 title=f'{symbol} | {tipo_operacion} | {config_optima["timeframe"]} | Breakout+Reentry',
-                                 ylabel='Precio',
-                                 addplot=apds,
-                                 volume=False,
-                                 returnfig=True,
-                                 figsize=(14, 10),
-                                 panel_ratios=(3, 1))
+            # Panel principal - Gráfico de velas
+            for i, (date, row) in enumerate(df.iterrows()):
+                open_price = row['Open']
+                high_price = row['High']
+                low_price = row['Low']
+                close_price = row['Close']
+                
+                # Color de la vela
+                color = '#00FF00' if close_price >= open_price else '#FF0000'
+                edge_color = '#FFFFFF' if close_price >= open_price else '#FF0000'
+                
+                # Cuerpo de la vela
+                body_height = abs(close_price - open_price)
+                body_bottom = min(open_price, close_price)
+                
+                # Dibujar cuerpo
+                rect = patches.Rectangle((i - 0.3, body_bottom), 0.6, body_height,
+                                       linewidth=1, edgecolor=edge_color, 
+                                       facecolor=color, alpha=0.8)
+                ax1.add_patch(rect)
+                
+                # Mecha superior
+                ax1.plot([i, i], [high_price, max(open_price, close_price)], 
+                        color=edge_color, linewidth=1)
+                
+                # Mecha inferior
+                ax1.plot([i, i], [low_price, min(open_price, close_price)], 
+                        color=edge_color, linewidth=1)
 
+            # Agregar líneas del canal
+            ax1.plot(tiempos_reg, resistencia_values, color='#5444ff', 
+                    linestyle='--', linewidth=2, label='Resistencia', alpha=0.8)
+            ax1.plot(tiempos_reg, soporte_values, color='#5444ff', 
+                    linestyle='--', linewidth=2, label='Soporte', alpha=0.8)
+            
+            # Líneas de niveles de trading
+            ax1.plot(tiempos_reg, entry_line, color='#FFD700', 
+                    linestyle='-', linewidth=2, label='Entrada', alpha=0.9)
+            ax1.plot(tiempos_reg, tp_line, color='#00FF00', 
+                    linestyle='-', linewidth=2, label='Take Profit', alpha=0.9)
+            ax1.plot(tiempos_reg, sl_line, color='#FF0000', 
+                    linestyle='-', linewidth=2, label='Stop Loss', alpha=0.9)
+
+            # Configurar ejes
+            ax1.set_title(f'{symbol} | {tipo_operacion} | {config_optima["timeframe"]} | Breakout+Reentry', 
+                         color='white', fontsize=14, fontweight='bold')
+            ax1.set_ylabel('Precio', color='white')
+            ax1.grid(True, alpha=0.3)
+            ax1.legend(loc='upper left')
+            
+            # Configurar colores del panel principal
+            ax1.tick_params(colors='white')
+            ax1.spines['bottom'].set_color('white')
+            ax1.spines['top'].set_color('white')
+            ax1.spines['right'].set_color('white')
+            ax1.spines['left'].set_color('white')
+
+            # Panel de volumen
+            colors = ['#00FF00' if close >= open else '#FF0000' 
+                     for open, close in zip(df['Open'], df['Close'])]
+            ax2.bar(range(len(df)), df['Volume'], color=colors, alpha=0.7)
+            ax2.set_ylabel('Volumen', color='white')
+            ax2.set_xlabel('Tiempo', color='white')
+            ax2.tick_params(colors='white')
+            ax2.spines['bottom'].set_color('white')
+            ax2.spines['top'].set_color('white')
+            ax2.spines['right'].set_color('white')
+            ax2.spines['left'].set_color('white')
+
+            # Configurar fondo
+            fig.patch.set_facecolor('#1a1a1a')
+            
+            # Ajustar layout
+            plt.tight_layout()
+
+            # Guardar en buffer
             buf = BytesIO()
-            plt.savefig(buf, format='png', dpi=100, bbox_inches='tight', facecolor='#1a1a1a')
+            plt.savefig(buf, format='png', dpi=100, bbox_inches='tight', 
+                       facecolor='#1a1a1a', edgecolor='none')
             buf.seek(0)
             plt.close(fig)
             return buf
