@@ -145,7 +145,7 @@ class Constants:
     LOG_LEVEL = "INFO"
     LOG_FORMAT = '%(asctime)s - %(levelname)s - %(message)s'
 
-# Configuración de logging
+# Configuración de logging - MOVIDA DESPUÉS DE LA DEFINICIÓN DE Constants
 LOGGING_CONFIG = {
     'level': Constants.LOG_LEVEL,
     'format': Constants.LOG_FORMAT,
