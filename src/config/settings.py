@@ -2,7 +2,6 @@
 Configuración y constantes del bot de trading.
 Contiene todas las configuraciones cargadas desde variables de entorno.
 """
-
 import os
 from typing import List, Dict, Any
 
@@ -141,14 +140,14 @@ class Constants:
     DIAS_REPORTE_SEMANAL = 7
     HORA_REPORTE_SEMANAL = 9
     
-    # Configuración de logging
+    # Configuración de logging (valores directos para evitar dependencias)
     LOG_LEVEL = "INFO"
     LOG_FORMAT = '%(asctime)s - %(levelname)s - %(message)s'
 
-# Configuración de logging - MOVIDA DESPUÉS DE LA DEFINICIÓN DE Constants
+# Configuración de logging - DEFINIDA DESPUÉS DE Constants PARA EVITAR PROBLEMAS
 LOGGING_CONFIG = {
-    'level': Constants.LOG_LEVEL,
-    'format': Constants.LOG_FORMAT,
+    'level': 'INFO',  # Usamos valor directo en lugar de Constants.LOG_LEVEL
+    'format': '%(asctime)s - %(levelname)s - %(message)s',  # Valor directo en lugar de Constants.LOG_FORMAT
     'stream': None  # Se configura en el módulo principal
 }
 
