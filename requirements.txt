@@ -12,7 +12,8 @@ scipy>=1.7.0
 
 # Visualización
 matplotlib>=3.5.0
-mplfinance>=0.12.0
+# mplfinance>=0.12.0  # DESHABILITADO: Incompatible con Python 3.13+
+# Usar matplotlib directamente para gráficos
 
 # Servidor web y APIs
 flask>=2.0.0
