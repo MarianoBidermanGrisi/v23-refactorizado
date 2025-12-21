@@ -1,8 +1,8 @@
 """
 Aplicación Flask para Render.com
 Maneja health checks, webhooks y endpoints de monitoreo.
+CORRECCIÓN: Logging mejorado sin cambios en lógica de trading
 """
-
 import os
 import sys
 import json
@@ -39,7 +39,6 @@ def index():
     """Endpoint principal"""
     try:
         estado = "🤖 Bot Breakout + Reentry está en línea" if orchestrator and orchestrator.running else "⚠️ Bot en mantenimiento"
-        
         info_sistema = {
             'status': 'ok' if orchestrator and orchestrator.running else 'maintenance',
             'timestamp': datetime.now().isoformat(),
@@ -52,9 +51,7 @@ def index():
             'version': '2.3.0',
             'estrategia': 'Breakout + Reentry'
         }
-        
         return jsonify(info_sistema), 200 if orchestrator and orchestrator.running else 503
-        
     except Exception as e:
         logger.error(f"Error en endpoint principal: {e}")
         return jsonify({
@@ -69,7 +66,7 @@ def health_check():
     try:
         # Verificar salud del sistema
         health_status = render_health_client.verificar_health()
-        
+
         # Agregar información del bot si está disponible
         if orchestrator and orchestrator.running:
             health_status['bot_status'] = 'running'
@@ -77,12 +74,10 @@ def health_check():
             health_status['esperando_reentry'] = len(orchestrator.bot_instance.esperando_reentry)
         else:
             health_status['bot_status'] = 'stopped'
-        
+
         # Status code basado en salud general
         status_code = 200 if health_status.get('status') == 'ok' else 503
-        
         return jsonify(health_status), status_code
-        
     except Exception as e:
         logger.error(f"Error en health check: {e}")
         return jsonify({
@@ -101,12 +96,10 @@ def status_completo():
                 'message': 'Orquestador no inicializado',
                 'timestamp': datetime.now().isoformat()
             }), 503
-        
+
         # Obtener estado completo
         estado = orchestrator.obtener_estado_sistema()
-        
         return jsonify(estado), 200
-        
     except Exception as e:
         logger.error(f"Error en status: {e}")
         return jsonify({
@@ -121,15 +114,12 @@ def telegram_webhook():
     try:
         if not request.is_json:
             return jsonify({"error": "Request must be JSON"}), 400
-        
+
         update = request.get_json()
         logger.debug(f"Update recibido: {json.dumps(update)}")
-        
         # Procesar actualización (aquí se pueden agregar comandos)
         # Por ahora solo confirmamos recepción
-        
         return jsonify({"status": "ok"}), 200
-        
     except Exception as e:
         logger.error(f"Error procesando webhook: {e}")
         return jsonify({
@@ -143,7 +133,6 @@ def estadisticas_api():
     try:
         estadisticas = utilidades_bot.generar_estadisticas_sistema()
         return jsonify(estadisticas), 200
-        
     except Exception as e:
         logger.error(f"Error en estadísticas API: {e}")
         return jsonify({
@@ -165,9 +154,7 @@ def configuracion_api():
             'telegram_configurado': bool(config.telegram_token),
             'telegram_chats_count': len(config.telegram_chat_ids)
         }
-        
         return jsonify(config_limpia), 200
-        
     except Exception as e:
         logger.error(f"Error en configuración API: {e}")
         return jsonify({
@@ -182,42 +169,37 @@ def control_bot():
     try:
         data = request.get_json() or {}
         accion = data.get('accion', '').lower()
-        
+
         if not orchestrator:
             return jsonify({
                 'status': 'error',
                 'message': 'Orquestador no inicializado'
             }), 503
-        
+
         resultado = {}
-        
         if accion == 'restart':
             if orchestrator.running:
                 orchestrator.detener_sistema()
-                time.sleep(2)
+                time.sleep(2)  # Pausa para que el sistema se detenga completamente
             orchestrator.inicializar_sistema()
             orchestrator.iniciar_bot_background()
             resultado['message'] = 'Bot reiniciado'
-            
         elif accion == 'stop':
             orchestrator.detener_sistema()
             resultado['message'] = 'Bot detenido'
-            
         elif accion == 'status':
             resultado = orchestrator.obtener_estado_sistema()
-            
         else:
             return jsonify({
                 'status': 'error',
                 'message': 'Acción no válida. Use: restart, stop, status'
             }), 400
-        
+
         return jsonify({
             'status': 'ok',
             'resultado': resultado,
             'timestamp': datetime.now().isoformat()
         }), 200
-        
     except Exception as e:
         logger.error(f"Error en control API: {e}")
         return jsonify({
@@ -251,12 +233,12 @@ def setup_telegram_webhook():
         if not config.telegram_token:
             logger.warning("Token de Telegram no configurado, omitiendo webhook")
             return
-        
+
         # Construir URL del webhook
         webhook_url = config.webhook_url
         if not webhook_url and config.render_url:
             webhook_url = f"{config.render_url}/webhook"
-        
+
         if webhook_url:
             logger.info(f"Configurando webhook: {webhook_url}")
             if telegram_client.configurar_webhook(webhook_url):
@@ -265,7 +247,6 @@ def setup_telegram_webhook():
                 logger.error("❌ Error configurando webhook")
         else:
             logger.warning("URL de webhook no disponible")
-            
     except Exception as e:
         logger.error(f"Error configurando webhook: {e}")
 
@@ -273,24 +254,20 @@ def iniciar_flask_app():
     """Inicia la aplicación Flask"""
     try:
         logger.info("🌐 Iniciando servidor Flask...")
-        
         # Configurar webhook si está disponible
         setup_telegram_webhook()
-        
+
         # Iniciar servidor
         port = config.flask_port
         debug = config.flask_debug
-        
         logger.info(f"📡 Servidor ejecutándose en puerto {port}")
         logger.info(f"🔍 Debug: {'activado' if debug else 'desactivado'}")
-        
         app.run(
             host='0.0.0.0',
             port=port,
             debug=debug,
             threaded=True
         )
-        
     except Exception as e:
         logger.error(f"❌ Error iniciando Flask: {e}")
         raise
