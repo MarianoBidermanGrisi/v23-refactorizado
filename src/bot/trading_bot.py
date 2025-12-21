@@ -3,6 +3,7 @@ Bot principal de trading con logs detallados y corrección para confirmación de
 Orquesta toda la lógica de trading, manejo de estado y coordinación.
 MEJORADO CON LOGS EXTENSIVOS PARA MAYOR VISIBILIDAD Y CONFIRMACIÓN DE GRÁFICOS
 CORRECCIÓN: Arreglada inicialización de DatosMercado para evitar errores de logs
+MODIFICADO: Agregado Stochastic y eliminado volumen del gráfico
 """
 import os
 import json
@@ -13,13 +14,14 @@ import threading
 from typing import Dict, List, Any, Optional, Set
 from datetime import datetime, timedelta
 from io import BytesIO
-from ..config.settings import config, Constants
-from ..api.clients import telegram_client, binance_client
-from ..strategies.breakout_reentry import estrategia, CanalInfo, DatosMercado
-from ..strategies.optimizador_ia import optimizador_ia
+from .config.settings import config, Constants
+from .api.clients import telegram_client, binance_client
+from .strategies.breakout_reentry import estrategia, CanalInfo, DatosMercado
+from .strategies.optimizador_ia import optimizador_ia
 import csv # Explicitly added from context, as it's used but not in initial imports
 import matplotlib.pyplot as plt # Explicitly added from context
 import pandas as pd # Explicitly added from context
+import numpy as np
 
 class TradingBot:
     """Bot principal de trading Breakout + Reentry con logs extensivos y confirmación de gráficos"""
@@ -304,16 +306,71 @@ class TradingBot:
             self.logger.error(f"❌ [ALERTA] {symbol}: Error enviando alerta: {e}")
             self.estadisticas_graficos['errores_generacion'] += 1
 
-    def generar_grafico_breakout(self, symbol: str, datos_mercado: DatosMercado, canal_info: CanalInfo, breakout_info: Dict[str, Any]) -> Optional[BytesIO]:
-        """Genera gráfico de breakout"""
+    def calcular_stochastic_historico(self, datos_mercado: DatosMercado, period: int = None, k_period: int = None, d_period: int = None) -> tuple:
+        """
+        Calcula los valores históricos de Stochastic K y D para mostrar en el gráfico
+        Returns:
+            Tuple con (stoch_k_values, stoch_d_values)
+        """
         try:
-            self.logger.debug(f"📊 [GRAFICO] {symbol}: Iniciando generación de gráfico...")
+            # Usar valores de Constants si no se proporcionan
+            if period is None:
+                period = Constants.PERIOD_STOCHASTIC
+            if k_period is None:
+                k_period = Constants.K_PERIOD
+            if d_period is None:
+                d_period = Constants.D_PERIOD
+
+            cierres = datos_mercado.cierres
+            maximos = datos_mercado.maximos
+            minimos = datos_mercado.minimos
+
+            self.logger.debug(f"📊 [STOCH_HIST] Calculando Stochastic histórico (period={period}, k={k_period}, d={d_period})")
+
+            k_values = []
+            for i in range(period - 1, len(cierres)):
+                highest_high = max(maximos[i - period + 1:i + 1])
+                lowest_low = min(minimos[i - period + 1:i + 1])
+                if highest_high == lowest_low:
+                    k = 50
+                else:
+                    k = 100 * (cierres[i] - lowest_low) / (highest_high - lowest_low)
+                k_values.append(k)
+
+            # Calcular K suavizado
+            k_smoothed = []
+            for i in range(k_period - 1, len(k_values)):
+                k_avg = sum(k_values[i - k_period + 1:i + 1]) / k_period
+                k_smoothed.append(k_avg)
+
+            # Calcular D (promedio móvil de K suavizado)
+            d_values = []
+            for i in range(d_period - 1, len(k_smoothed)):
+                d_avg = sum(k_smoothed[i - d_period + 1:i + 1]) / d_period
+                d_values.append(d_avg)
+
+            # Alinear los arrays para que tengan la misma longitud
+            min_len = min(len(k_smoothed), len(d_values))
+            stoch_k_final = k_smoothed[-min_len:] if min_len > 0 else [50]
+            stoch_d_final = d_values[-min_len:] if min_len > 0 else [50]
+
+            self.logger.debug(f"✅ [STOCH_HIST] Calculados {len(stoch_k_final)} valores de Stochastic")
+            return stoch_k_final, stoch_d_final
+
+        except Exception as e:
+            self.logger.error(f"❌ [STOCH_HIST] Error calculando Stochastic histórico: {e}")
+            return [50], [50]
+
+    def generar_grafico_breakout(self, symbol: str, datos_mercado: DatosMercado, canal_info: CanalInfo, breakout_info: Dict[str, Any]) -> Optional[BytesIO]:
+        """Genera gráfico de breakout CON STOCHASTIC Y CANAL COMPLETO"""
+        try:
+            self.logger.debug(f"📊 [GRAFICO] {symbol}: Iniciando generación de gráfico con Stochastic...")
+            
             # Configurar matplotlib para mejor compatibilidad
             plt.style.use('default')
-            fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(12, 8), gridspec_kw={'height_ratios': [3, 1]})
+            fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(14, 10), gridspec_kw={'height_ratios': [3, 1]})
 
-            # Gráfico principal
-            # CORRECCIÓN: Usar datos_mercado.cierres en lugar de df
+            # Gráfico principal con candlesticks
             cierres = datos_mercado.cierres
             maximos = datos_mercado.maximos
             minimos = datos_mercado.minimos
@@ -333,14 +390,17 @@ class TradingBot:
                 # Mechas
                 ax1.plot([i, i], [low_price, high_price], color='black', linewidth=1)
 
-            # Líneas del canal
-            # CORRECCIÓN: Calcular líneas del canal correctamente
+            # Líneas del canal (resistencia y soporte)
             num_velas = len(cierres)
             resistencia_line = [canal_info.resistencia] * num_velas
             soporte_line = [canal_info.soporte] * num_velas
             
-            ax1.plot(range(num_velas), resistencia_line, 'r--', label='Resistencia', linewidth=2)
-            ax1.plot(range(num_velas), soporte_line, 'g--', label='Soporte', linewidth=2)
+            ax1.plot(range(num_velas), resistencia_line, 'r--', label=f'Resistencia ({canal_info.resistencia:.6f})', linewidth=2)
+            ax1.plot(range(num_velas), soporte_line, 'g--', label=f'Soporte ({canal_info.soporte:.6f})', linewidth=2)
+
+            # Línea de tendencia central
+            tendencia_line = [canal_info.linea_tendencia] * num_velas
+            ax1.plot(range(num_velas), tendencia_line, 'b:', label=f'Tendencia ({canal_info.linea_tendencia:.6f})', linewidth=1.5)
 
             # Línea de breakout
             breakout_line = [breakout_info['precio_breakout']] * num_velas
@@ -348,16 +408,41 @@ class TradingBot:
             ax1.plot(range(num_velas), breakout_line, color=color_breakout, linewidth=3,
                      label=f"Breakout {breakout_info['direccion'].upper()}")
 
-            # Configurar gráfico
-            ax1.set_title(f'{symbol} - Breakout Detectado', fontsize=14, fontweight='bold')
+            # Configurar gráfico principal
+            ax1.set_title(f'{symbol} - Breakout Detectado | Canal: {canal_info.direccion} | Fuerza: {canal_info.fuerza_texto}', 
+                         fontsize=14, fontweight='bold')
             ax1.set_ylabel('Precio', fontsize=12)
-            ax1.legend()
+            ax1.legend(loc='upper left', fontsize=10)
             ax1.grid(True, alpha=0.3)
 
-            # Gráfico de volumen (simplificado ya que no tenemos datos de volumen)
-            ax2.plot(range(len(cierres)), [1] * len(cierres), alpha=0.6, color='blue')
-            ax2.set_ylabel('Volumen', fontsize=12)
-            ax2.set_xlabel('Tiempo', fontsize=12)
+            # GRÁFICO DE STOCHASTIC (reemplazando el volumen)
+            stoch_k_values, stoch_d_values = self.calcular_stochastic_historico(datos_mercado)
+            
+            # Alinear datos de Stochastic con los índices de velas
+            start_idx = len(cierres) - len(stoch_k_values)
+            x_stoch = range(start_idx, len(cierres))
+            
+            # Plotear Stochastic K y D
+            ax2.plot(x_stoch, stoch_k_values, 'blue', linewidth=2, label=f'Stochastic K ({canal_info.stoch_k:.2f})')
+            ax2.plot(x_stoch, stoch_d_values, 'red', linewidth=2, label=f'Stochastic D ({canal_info.stoch_d:.2f})')
+            
+            # Líneas de sobrecompra y sobreventa
+            ax2.axhline(y=80, color='red', linestyle='--', alpha=0.7, label='Sobrecomprado (80)')
+            ax2.axhline(y=20, color='green', linestyle='--', alpha=0.7, label='Sobreventa (20)')
+            ax2.axhline(y=50, color='gray', linestyle='-', alpha=0.5, label='Línea media (50)')
+            
+            # Rellenar zonas de sobrecompra/sobreventa
+            ax2.fill_between(x_stoch, 80, 100, alpha=0.1, color='red', label='Zona sobrecomprado')
+            ax2.fill_between(x_stoch, 0, 20, alpha=0.1, color='green', label='Zona sobreventa')
+            
+            # Configurar gráfico de Stochastic
+            ax2.set_title(f'Stochastic Oscillator | K: {canal_info.stoch_k:.2f} | D: {canal_info.stoch_d:.2f}', 
+                         fontsize=12, fontweight='bold')
+            ax2.set_ylabel('Stochastic', fontsize=12)
+            ax2.set_xlabel('Velas', fontsize=12)
+            ax2.set_ylim(0, 100)
+            ax2.legend(loc='upper left', fontsize=9)
+            ax2.grid(True, alpha=0.3)
 
             plt.tight_layout()
 
@@ -365,8 +450,9 @@ class TradingBot:
             buf = BytesIO()
             plt.savefig(buf, format='png', dpi=100, bbox_inches='tight')
             plt.close(fig)
-            self.logger.debug(f"📊 [GRAFICO] {symbol}: Gráfico de breakout generado exitosamente")
+            self.logger.debug(f"📊 [GRAFICO] {symbol}: Gráfico de breakout con Stochastic generado exitosamente")
             return buf
+            
         except Exception as e:
             self.logger.error(f"❌ [GRAFICO] Error generando gráfico de breakout para {symbol}: {e}")
             return None
@@ -379,11 +465,22 @@ class TradingBot:
 **Par:** {symbol}
 **Dirección:** {direccion}
 **Precio Breakout:** {breakout_info['precio_breakout']:.6f}
-**Canal Superior:** {canal_info.resistencia:.6f}
-**Canal Inferior:** {canal_info.soporte:.6f}
-**Ancho Canal:** {canal_info.ancho_canal_porcentual:.2f}%
-**Tiempo:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
-📊 *Gráfico adjunto para análisis visual*"""
+
+📊 **ANÁLISIS DEL CANAL:**
+• **Resistencia:** {canal_info.resistencia:.6f}
+• **Soporte:** {canal_info.soporte:.6f}
+• **Ancho Canal:** {canal_info.ancho_canal_porcentual:.2f}%
+• **Dirección:** {canal_info.direccion}
+• **Fuerza:** {canal_info.fuerza_texto}
+• **R² Score:** {canal_info.r2_score:.4f}
+• **Pearson:** {canal_info.coeficiente_pearson:.4f}
+
+📈 **STOCHASTIC OSCILLATOR:**
+• **Stochastic K:** {canal_info.stoch_k:.2f}
+• **Stochastic D:** {canal_info.stoch_d:.2f}
+
+⏰ **Tiempo:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+📊 *Gráfico adjunto con análisis completo*"""
             return mensaje
         except Exception as e:
             self.logger.error(f"❌ [MESSAGE] Error creando mensaje de breakout: {e}")
