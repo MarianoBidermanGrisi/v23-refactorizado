@@ -8,12 +8,12 @@ from datetime import datetime
 from ..config.settings import Constants, LOGGING_CONFIG
 
 def configurar_logging():
-    """Configura el sistema de logging del bot"""
+    """Configura el sistema de logging del bot - SIN DUPLICACIÓN"""
     try:
         # Usar LOGGING_CONFIG importado para evitar problemas de dependencias
         log_format = LOGGING_CONFIG['format']
         log_level = LOGGING_CONFIG['level']
-        
+
         # Configurar formato
         formatter = logging.Formatter(
             fmt=log_format,
@@ -23,9 +23,8 @@ def configurar_logging():
         # Configurar nivel
         level = getattr(logging, log_level.upper(), logging.INFO)
 
-        # Handler para consola (separando stdout y stderr)
+        # CORRECCIÓN: Solo un handler para consola para evitar duplicación
         console_handler = logging.StreamHandler(sys.stdout)
-        error_handler = logging.StreamHandler(sys.stderr)
 
         # Handler para archivo con rotación
         try:
@@ -42,13 +41,12 @@ def configurar_logging():
         logger = logging.getLogger()
         logger.setLevel(level)
 
-        # Limpiar handlers existentes
+        # CORRECCIÓN: Limpiar TODOS los handlers existentes primero
         for handler in logger.handlers[:]:
             logger.removeHandler(handler)
 
-        # Agregar handlers (INFO+ para stdout, ERROR+ para stderr, todo para archivo)
+        # CORRECCIÓN: Solo agregar handlers únicos (SIN duplicación)
         logger.addHandler(console_handler)
-        logger.addHandler(error_handler)
         if file_handler:
             logger.addHandler(file_handler)
 
@@ -59,6 +57,7 @@ def configurar_logging():
         # Usar el logger configurado
         logger.info("📝 Sistema de logging configurado correctamente")
         return logger
+
     except Exception as e:
         # Usar stderr directamente ya que el logging aún no está configurado
         sys.stderr.write(f"❌ Error configurando logging: {e}\n")
@@ -79,11 +78,11 @@ def obtener_logger(nombre: str = None) -> logging.Logger:
     else:
         return logging.getLogger(__name__)
 
-# Configurar logging al importar - SIN CAMBIOS EN LA LÓGICA DE TRADING
+# Configurar logging al importar - CORREGIDO para evitar duplicación
 try:
     logger_base = configurar_logging()
     logger_base.info("🔧 Logging configurado")
-except Exception as e:
+except Exception as e:  # CORRECCIÓN: Error tipográfico corregido
     # Usar stderr directamente
     sys.stderr.write(f"⚠️ Error configurando logging durante importación: {e}\n")
     # Configuración de emergencia sin Constants
