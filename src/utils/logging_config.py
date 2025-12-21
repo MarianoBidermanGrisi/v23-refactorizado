@@ -1,6 +1,7 @@
 """
 Configuración de logging para el bot.
 Configura los logs del sistema de manera centralizada.
+CORRECCIÓN: Sin cambios en lógica de trading, solo mejoras en configuración de logs
 """
 import logging
 import sys
@@ -82,7 +83,7 @@ def obtener_logger(nombre: str = None) -> logging.Logger:
 try:
     logger_base = configurar_logging()
     logger_base.info("🔧 Logging configurado")
-except Exception as e:  # CORRECCIÓN: Error tipográfico corregido
+except Exception as e: # CORRECCIÓN: Error tipográfico corregido
     # Usar stderr directamente
     sys.stderr.write(f"⚠️ Error configurando logging durante importación: {e}\n")
     # Configuración de emergencia sin Constants
