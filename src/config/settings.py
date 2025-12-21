@@ -3,7 +3,11 @@ Configuración y constantes del bot de trading.
 Contiene todas las configuraciones cargadas desde variables de entorno.
 """
 import os
+import logging
 from typing import List, Dict, Any
+
+# Configurar logger para este módulo
+logger = logging.getLogger(__name__)
 
 class ConfigSettings:
     """Configuración centralizada del bot desde variables de entorno"""
@@ -66,13 +70,13 @@ class ConfigSettings:
             self.flask_port = int(os.environ.get('PORT', '5000'))
             self.flask_debug = os.environ.get('FLASK_DEBUG', 'false').lower() == 'true'
             
-            print("✅ Configuración cargada correctamente desde variables de entorno")
-            print(f"   📊 Símbolos: {len(self.symbols)}")
-            print(f"   ⏰ Timeframes: {', '.join(self.timeframes)}")
-            print(f"   🕯️ Velas: {', '.join(map(str, self.velas_options))}")
+            logger.info("✅ Configuración cargada correctamente desde variables de entorno")
+            logger.info(f"   📊 Símbolos: {len(self.symbols)}")
+            logger.info(f"   ⏰ Timeframes: {', '.join(self.timeframes)}")
+            logger.info(f"   🕯️ Velas: {', '.join(map(str, self.velas_options))}")
             
         except Exception as e:
-            print(f"❌ Error cargando configuración: {e}")
+            logger.error(f"❌ Error cargando configuración: {e}")
             raise
     
     def get_config_dict(self) -> Dict[str, Any]:
@@ -152,4 +156,4 @@ LOGGING_CONFIG = {
     'stream': None  # Se configura en el módulo principal
 }
 
-print("📋 Configuración y constantes cargadas correctamente")
+logger.info("📋 Configuración y constantes cargadas correctamente")
