@@ -43,8 +43,8 @@ class TradingBot:
         self.logger = logging.getLogger(__name__)
 
         # Estado del bot
-        self.log_path = self._get_config_value('log_path', config.log_path)
-        self.auto_optimize = self._get_config_value('auto_optimize', config.auto_optimize)
+        self.log_path = self._get_config_value('log_path', self._config_instance.log_path)
+        self.auto_optimize = self._get_config_value('auto_optimize', self._config_instance.auto_optimize)
         self.ultima_optimizacion = datetime.now()
         self.operaciones_desde_optimizacion = 0
         self.total_operaciones = 0
@@ -138,7 +138,7 @@ class TradingBot:
     def cargar_estado(self):
         """Carga el estado previo del bot desde archivo con logs detallados"""
         try:
-            estado_file = self._get_config_value('estado_file', config.estado_file)
+            estado_file = self._get_config_value('estado_file', self._config_instance.estado_file)
             self.logger.debug(f"💾 [ESTADO] Cargando estado desde: {estado_file}")
             
             if os.path.exists(estado_file):
@@ -238,7 +238,7 @@ class TradingBot:
                 },
                 'timestamp_guardado': datetime.now().isoformat()
             }
-            estado_file = self._get_config_value('estado_file', config.estado_file)
+            estado_file = self._get_config_value('estado_file', self._config_instance.estado_file)
             with open(estado_file, 'w', encoding='utf-8') as f:
                 json.dump(estado, f, indent=2, ensure_ascii=False)
             
@@ -312,9 +312,9 @@ class TradingBot:
             configs_probadas = 0
 
             # Obtener configuración del config
-            timeframes = self._get_config_value('timeframes', config.timeframes)
-            velas_options = self._get_config_value('velas_options', config.velas_options)
-            min_channel_width_percent = self._get_config_value('min_channel_width_percent', config.min_channel_width_percent)
+            timeframes = self._get_config_value('timeframes', self._config_instance.timeframes)
+            velas_options = self._get_config_value('velas_options', self._config_instance.velas_options)
+            min_channel_width_percent = self._get_config_value('min_channel_width_percent', self._config_instance.min_channel_width_percent)
 
             self.logger.debug(f"📊 [CONFIG] {symbol}: Parámetros de búsqueda:")
             self.logger.debug(f"   • Timeframes: {timeframes}")
@@ -528,8 +528,8 @@ class TradingBot:
 """
 
             # Enviar por Telegram si está configurado
-            telegram_token = self._get_config_value('telegram_token', config.telegram_token)
-            telegram_chat_ids = self._get_config_value('telegram_chat_ids', config.telegram_chat_ids)
+            telegram_token = self._get_config_value('telegram_token', self._config_instance.telegram_token)
+            telegram_chat_ids = self._get_config_value('telegram_chat_ids', self._config_instance.telegram_chat_ids)
 
             if telegram_token and telegram_chat_ids:
                 try:
@@ -697,7 +697,7 @@ class TradingBot:
         try:
             timestamp_ciclo_inicio = datetime.now()
             
-            symbols = self._get_config_value('symbols', config.symbols)
+            symbols = self._get_config_value('symbols', self._config_instance.symbols)
             self.stats_bot['ciclos_escaneo'] += 1
             
             self.logger.info(f"\n🔍 [ESCANEO] Iniciando ciclo #{self.stats_bot['ciclos_escaneo']} - Escaneando {len(symbols)} símbolos")
@@ -1218,7 +1218,7 @@ class TradingBot:
                 self.logger.info(f"🏁 [BOT] Ciclo completado en {tiempo_ciclo:.3f}s - {senales_encontradas} señales")
                 
                 # Esperar antes del siguiente ciclo
-                interval = self._get_config_value('scan_interval_minutes', config.scan_interval_minutes)
+                interval = self._get_config_value('scan_interval_minutes', self._config_instance.scan_interval_minutes)
                 tiempo_espera = interval * 60
                 
                 self.logger.debug(f"⏰ [BOT] Esperando {interval} minutos hasta el siguiente ciclo...")
