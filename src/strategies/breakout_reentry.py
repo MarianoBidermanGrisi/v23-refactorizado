@@ -3,6 +3,7 @@ Estrategias de trading con logs detallados.
 Contiene toda la lógica de análisis técnico y señales de trading.
 MEJORADO CON LOGS EXTENSIVOS PARA MAYOR VISIBILIDAD
 CORRECCIÓN: Lógica de breakout corregida para que coincida con la estrategia original
+CORRECCIÓN APLICADA: Agregados parámetros faltantes a DatosMercado para corregir errores de logs
 """
 import numpy as np
 import math
@@ -12,6 +13,14 @@ from typing import List, Dict, Any, Tuple, Optional
 from datetime import datetime, timedelta
 from dataclasses import dataclass
 from ..config.settings import config, Constants
+
+# Importación condicional para pandas (si está disponible)
+try:
+    import pandas as pd
+    HAS_PANDAS = True
+except ImportError:
+    HAS_PANDAS = False
+    pd = None
 
 @dataclass
 class CanalInfo:
@@ -48,6 +57,10 @@ class DatosMercado:
     precio_actual: float
     timeframe: str
     num_velas: int
+    # Parámetros adicionales para compatibilidad con trading_bot.py
+    symbol: str = ""
+    df: Optional[object] = None
+    timestamp: Optional[datetime] = None
 
 class EstrategiaBreakoutReentry:
     """Estrategia de trading Breakout + Reentry"""
