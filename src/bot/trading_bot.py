@@ -14,10 +14,10 @@ import threading
 from typing import Dict, List, Any, Optional, Set
 from datetime import datetime, timedelta
 from io import BytesIO
-from .config.settings import config, Constants
-from .api.clients import telegram_client, binance_client
-from .strategies.breakout_reentry import estrategia, CanalInfo, DatosMercado
-from .strategies.optimizador_ia import optimizador_ia
+from src.config.settings import config, Constants
+from src.api.clients import telegram_client, binance_client
+from src.strategies.breakout_reentry import estrategia, CanalInfo, DatosMercado
+from src.strategies.optimizador_ia import optimizador_ia
 import csv # Explicitly added from context, as it's used but not in initial imports
 import matplotlib.pyplot as plt # Explicitly added from context
 import pandas as pd # Explicitly added from context
