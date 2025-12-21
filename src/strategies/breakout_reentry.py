@@ -4,6 +4,7 @@ Contiene toda la lógica de análisis técnico y señales de trading.
 MEJORADO CON LOGS EXTENSIVOS PARA MAYOR VISIBILIDAD
 CORRECCIÓN: Lógica de breakout corregida para que coincida con la estrategia original
 CORRECCIÓN APLICADA: Agregados parámetros faltantes a DatosMercado para corregir errores de logs
+MODIFICADO: Optimizado para trabajar con el nuevo sistema de gráficos con Stochastic
 """
 import numpy as np
 import math
@@ -13,6 +14,7 @@ from typing import List, Dict, Any, Tuple, Optional
 from datetime import datetime, timedelta
 from dataclasses import dataclass
 from ..config.settings import config, Constants
+
 # Importación condicional para pandas (si está disponible)
 try:
     import pandas as pd
@@ -62,7 +64,7 @@ class DatosMercado:
     timestamp: Optional[datetime] = None
 
 class EstrategiaBreakoutReentry:
-    """Estrategia de trading Breakout + Reentry"""
+    """Estrategia de trading Breakout + Reentry con análisis técnico avanzado"""
     def __init__(self):
         self.logger = logging.getLogger(__name__)
         # Contadores para estadísticas de logs
@@ -72,7 +74,8 @@ class EstrategiaBreakoutReentry:
             'canales_calculados': 0,
             'breakouts_detectados': 0,
             'reentries_detectados': 0,
-            'operaciones_calculadas': 0
+            'operaciones_calculadas': 0,
+            'stochasticos_calculados': 0
         }
 
     def obtener_datos_mercado(self, symbol: str, timeframe: str, num_velas: int) -> Optional[DatosMercado]:
@@ -89,6 +92,7 @@ class EstrategiaBreakoutReentry:
             from ..api.clients import binance_client
             timestamp_inicio = datetime.now()
             self.logger.debug(f"🔍 [DATOS] Iniciando obtención de datos para {symbol} {timeframe} - {num_velas} velas")
+            
             # Obtener datos de Binance
             datos_raw = binance_client.obtener_datos_klines(symbol, timeframe, num_velas + 14)
             if not datos_raw:
@@ -105,12 +109,14 @@ class EstrategiaBreakoutReentry:
             precio_actual = cierres[-1] if cierres else 0
             timestamp_fin = datetime.now()
             tiempo_procesamiento = (timestamp_fin - timestamp_inicio).total_seconds()
+            
             self.logger.info(f"📊 [DATOS] {symbol} {timeframe}:")
             self.logger.info(f" • Velas obtenidas: {len(datos_raw)} (solicitadas: {num_velas + 14})")
             self.logger.info(f" • Precio actual: {precio_actual:.8f}")
             self.logger.info(f" • Rango de precios: {min(minimos):.8f} - {max(maximos):.8f}")
             self.logger.info(f" • Timestamp datos más recientes: {datetime.fromtimestamp(datos_raw[-1][0]/1000).isoformat()}")
             self.logger.info(f" • Tiempo de procesamiento: {tiempo_procesamiento:.3f}s")
+            
             self.stats['datos_obtenidos'] += 1
 
             return DatosMercado(
@@ -320,6 +326,8 @@ class EstrategiaBreakoutReentry:
                     self.logger.debug(f"✅ [STOCH] Resultados:")
                     self.logger.debug(f" • Stochastic K: {k_final:.2f} ({stoch_texto_k})")
                     self.logger.debug(f" • Stochastic D: {d:.2f} ({stoch_texto_d})")
+                    
+                    self.stats['stochasticos_calculados'] += 1
                     return k_final, d
             
             self.logger.debug(f"⚠️ [STOCH] No se pudieron calcular valores válidos, retornando 50,50")
@@ -760,10 +768,11 @@ class EstrategiaBreakoutReentry:
             'canales_calculados': 0,
             'breakouts_detectados': 0,
             'reentries_detectados': 0,
-            'operaciones_calculadas': 0
+            'operaciones_calculadas': 0,
+            'stochasticos_calculados': 0
         }
         self.logger.info("🔄 [STATS] Estadísticas de logs reiniciadas")
 
 # Instancia global de la estrategia
 estrategia = EstrategiaBreakoutReentry()
-print("📈 Estrategia Breakout + Reentry con logs detallados cargada correctamente")
+print("📈 Estrategia Breakout + Reentry con logs detallados y Stochastic cargada correctamente")
