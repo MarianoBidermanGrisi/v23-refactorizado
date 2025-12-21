@@ -2,6 +2,7 @@
 """
 Script de inicio simplificado para Render.com
 Ejecuta el bot de trading con configuración automática.
+CORRECCIÓN: Logging mejorado sin cambios en lógica de trading
 """
 import os
 import sys
@@ -22,7 +23,7 @@ def configurar_logging_basico():
             level=logging.INFO,
             format='%(asctime)s - %(levelname)s - %(message)s',
             handlers=[
-                logging.StreamHandler(sys.stdout)  # SOLO consola, NO archivo
+                logging.StreamHandler(sys.stdout) # SOLO consola, NO archivo
             ]
         )
         return logging.getLogger(__name__)
@@ -40,6 +41,7 @@ def main():
 
         # Importar y ejecutar aplicación Flask
         from flask_app import app, set_orchestrator_instance
+
         # Importar orquestador
         from index import orchestrator
 
