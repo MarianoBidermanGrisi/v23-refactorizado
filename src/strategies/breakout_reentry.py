@@ -2,6 +2,7 @@
 Estrategias de trading con logs detallados.
 Contiene toda la lógica de análisis técnico y señales de trading.
 MEJORADO CON LOGS EXTENSIVOS PARA MAYOR VISIBILIDAD
+CORRECCIÓN: Lógica de breakout corregida para que coincida con la estrategia original
 """
 import numpy as np
 import math
@@ -50,7 +51,6 @@ class DatosMercado:
 
 class EstrategiaBreakoutReentry:
     """Estrategia de trading Breakout + Reentry"""
-
     def __init__(self):
         self.logger = logging.getLogger(__name__)
         # Contadores para estadísticas de logs
@@ -75,7 +75,6 @@ class EstrategiaBreakoutReentry:
         """
         try:
             from ..api.clients import binance_client
-            
             timestamp_inicio = datetime.now()
             self.logger.debug(f"🔍 [DATOS] Iniciando obtención de datos para {symbol} {timeframe} - {num_velas} velas")
 
@@ -95,14 +94,13 @@ class EstrategiaBreakoutReentry:
             precio_actual = cierres[-1] if cierres else 0
             timestamp_fin = datetime.now()
             tiempo_procesamiento = (timestamp_fin - timestamp_inicio).total_seconds()
-            
             self.logger.info(f"📊 [DATOS] {symbol} {timeframe}:")
-            self.logger.info(f"   • Velas obtenidas: {len(datos_raw)} (solicitadas: {num_velas + 14})")
-            self.logger.info(f"   • Precio actual: {precio_actual:.8f}")
-            self.logger.info(f"   • Rango de precios: {min(minimos):.8f} - {max(maximos):.8f}")
-            self.logger.info(f"   • Timestamp datos más recientes: {datetime.fromtimestamp(datos_raw[-1][0]/1000).isoformat()}")
-            self.logger.info(f"   • Tiempo de procesamiento: {tiempo_procesamiento:.3f}s")
-            
+            self.logger.info(f" • Velas obtenidas: {len(datos_raw)} (solicitadas: {num_velas + 14})")
+            self.logger.info(f" • Precio actual: {precio_actual:.8f}")
+            self.logger.info(f" • Rango de precios: {min(minimos):.8f} - {max(maximos):.8f}")
+            self.logger.info(f" • Timestamp datos más recientes: {datetime.fromtimestamp(datos_raw[-1][0]/1000).isoformat()}")
+            self.logger.info(f" • Tiempo de procesamiento: {tiempo_procesamiento:.3f}s")
+
             self.stats['datos_obtenidos'] += 1
 
             return DatosMercado(
@@ -131,9 +129,9 @@ class EstrategiaBreakoutReentry:
 
             # Logs de validación inicial
             self.logger.debug(f"📈 [REGRESION] Calculando regresión para {n} puntos")
-            self.logger.debug(f"   • Rango X: {min(x)} a {max(x)}")
-            self.logger.debug(f"   • Rango Y: {min(y):.8f} a {max(y):.8f}")
-            
+            self.logger.debug(f" • Rango X: {min(x)} a {max(x)}")
+            self.logger.debug(f" • Rango Y: {min(y):.8f} a {max(y):.8f}")
+
             sum_x = np.sum(x_array)
             sum_y = np.sum(y_array)
             sum_xy = np.sum(x_array * y_array)
@@ -147,11 +145,11 @@ class EstrategiaBreakoutReentry:
                 pendiente = (n * sum_xy - sum_x * sum_y) / denom
 
             intercepto = (sum_y - pendiente * sum_x) / n if n else 0
-            
+
             # Log del resultado
             self.logger.debug(f"✅ [REGRESION] Resultado: pendiente={pendiente:.8f}, intercepto={intercepto:.8f}")
-            
             return pendiente, intercepto
+
         except Exception as e:
             self.logger.error(f"❌ [REGRESION] Error en regresión lineal: {e}")
             return None
@@ -187,7 +185,9 @@ class EstrategiaBreakoutReentry:
             denom_pend = (n * sum_x2 - sum_x * sum_x)
             pendiente = (n * sum_xy - sum_x * sum_y) / denom_pend if denom_pend != 0 else 0
 
-            angulo_radianes = math.atan(pendiente * len(x) / (max(y) - min(y)) if (max(y) - min(y)) != 0 else 0)
+            # Evitar división por cero para el ángulo
+            y_range = max(y) - min(y)
+            angulo_radianes = math.atan(pendiente * len(x) / y_range) if y_range != 0 else 0
             angulo_grados = math.degrees(angulo_radianes)
 
             # Interpretación de la correlación
@@ -203,11 +203,12 @@ class EstrategiaBreakoutReentry:
                 correlacion_texto = "MUY DÉBIL"
 
             self.logger.debug(f"✅ [PEARSON] Resultados:")
-            self.logger.debug(f"   • Coeficiente Pearson: {pearson:.4f} ({correlacion_texto})")
-            self.logger.debug(f"   • Ángulo tendencia: {angulo_grados:.2f}°")
-            self.logger.debug(f"   • Pendiente: {pendiente:.8f}")
+            self.logger.debug(f" • Coeficiente Pearson: {pearson:.4f} ({correlacion_texto})")
+            self.logger.debug(f" • Ángulo tendencia: {angulo_grados:.2f}°")
+            self.logger.debug(f" • Pendiente: {pendiente:.8f}")
 
             return pearson, angulo_grados
+
         except Exception as e:
             self.logger.error(f"❌ [PEARSON] Error calculando Pearson y ángulo: {e}")
             return 0, 0
@@ -230,7 +231,7 @@ class EstrategiaBreakoutReentry:
                 return 0
 
             r2_score = 1 - (ss_res / ss_tot)
-            
+
             # Interpretación del R²
             if r2_score >= 0.8:
                 ajuste_texto = "EXCELENTE"
@@ -242,10 +243,11 @@ class EstrategiaBreakoutReentry:
                 ajuste_texto = "POBRE"
 
             self.logger.debug(f"✅ [R2] Score: {r2_score:.4f} (Ajuste: {ajuste_texto})")
-            self.logger.debug(f"   • Varianza explicada: {ss_res:.4f}")
-            self.logger.debug(f"   • Varianza total: {ss_tot:.4f}")
+            self.logger.debug(f" • Varianza explicada: {ss_res:.4f}")
+            self.logger.debug(f" • Varianza total: {ss_tot:.4f}")
 
             return r2_score
+
         except Exception as e:
             self.logger.error(f"❌ [R2] Error calculando R²: {e}")
             return 0
@@ -291,7 +293,7 @@ class EstrategiaBreakoutReentry:
                 if len(k_smoothed) >= d_period:
                     d = sum(k_smoothed[-d_period:]) / d_period
                     k_final = k_smoothed[-1]
-                    
+
                     # Interpretación de Stochastic
                     if k_final >= 80:
                         stoch_texto_k = "SOBRECOMPRADO"
@@ -299,7 +301,7 @@ class EstrategiaBreakoutReentry:
                         stoch_texto_k = "SOBREVENDIDO"
                     else:
                         stoch_texto_k = "NEUTRAL"
-                    
+
                     if d >= 80:
                         stoch_texto_d = "SOBRECOMPRADO"
                     elif d <= 20:
@@ -308,13 +310,13 @@ class EstrategiaBreakoutReentry:
                         stoch_texto_d = "NEUTRAL"
 
                     self.logger.debug(f"✅ [STOCH] Resultados:")
-                    self.logger.debug(f"   • Stochastic K: {k_final:.2f} ({stoch_texto_k})")
-                    self.logger.debug(f"   • Stochastic D: {d:.2f} ({stoch_texto_d})")
-                    
+                    self.logger.debug(f" • Stochastic K: {k_final:.2f} ({stoch_texto_k})")
+                    self.logger.debug(f" • Stochastic D: {d:.2f} ({stoch_texto_d})")
                     return k_final, d
 
             self.logger.debug(f"⚠️ [STOCH] No se pudieron calcular valores válidos, retornando 50,50")
             return 50, 50
+
         except Exception as e:
             self.logger.error(f"❌ [STOCH] Error calculando Stochastic: {e}")
             return 50, 50
@@ -323,7 +325,6 @@ class EstrategiaBreakoutReentry:
         """Clasifica la fuerza de la tendencia con logs detallados"""
         try:
             angulo_abs = abs(angulo_grados)
-            
             self.logger.debug(f"💪 [FUERZA] Clasificando tendencia: ángulo={angulo_grados:.2f}° (abs={angulo_abs:.2f}°)")
 
             if angulo_abs < 3:
@@ -344,6 +345,7 @@ class EstrategiaBreakoutReentry:
 
             self.logger.debug(f"✅ [FUERZA] Clasificación: {fuerza_texto} (nivel {nivel})")
             return fuerza_texto, nivel
+
         except Exception as e:
             self.logger.error(f"❌ [FUERZA] Error clasificando fuerza: {e}")
             return "💔 Muy Débil", 1
@@ -352,7 +354,6 @@ class EstrategiaBreakoutReentry:
         """Determina la dirección de la tendencia con logs detallados"""
         try:
             angulo_abs = abs(angulo_grados)
-            
             self.logger.debug(f"🧭 [DIRECCION] Analizando dirección: ángulo={angulo_grados:.2f}°, umbral={umbral_minimo}°")
 
             if angulo_abs < umbral_minimo:
@@ -367,6 +368,7 @@ class EstrategiaBreakoutReentry:
 
             self.logger.debug(f"✅ [DIRECCION] Resultado: {direccion_emoji} {direccion}")
             return direccion
+
         except Exception as e:
             self.logger.error(f"❌ [DIRECCION] Error determinando dirección: {e}")
             return Constants.DIRECCION_RANGO
@@ -382,14 +384,13 @@ class EstrategiaBreakoutReentry:
         """
         try:
             timestamp_inicio = datetime.now()
-            
             if not datos_mercado or len(datos_mercado.maximos) < candle_period:
                 self.logger.debug(f"🔍 [CANAL] Datos insuficientes: {len(datos_mercado.maximos) if datos_mercado else 0} < {candle_period}")
                 return None
 
             self.logger.info(f"🏗️ [CANAL] Calculando canal de regresión ({candle_period} velas)")
-            self.logger.info(f"   • Timeframe: {datos_mercado.timeframe}")
-            self.logger.info(f"   • Precio actual: {datos_mercado.precio_actual:.8f}")
+            self.logger.info(f" • Timeframe: {datos_mercado.timeframe}")
+            self.logger.info(f" • Precio actual: {datos_mercado.precio_actual:.8f}")
 
             # Extraer datos del período
             start_idx = -candle_period
@@ -397,12 +398,11 @@ class EstrategiaBreakoutReentry:
             maximos = datos_mercado.maximos[start_idx:]
             minimos = datos_mercado.minimos[start_idx:]
             cierres = datos_mercado.cierres[start_idx:]
-
             tiempos_reg = list(range(len(tiempos)))
 
             self.logger.debug(f"📊 [CANAL] Datos extraídos del período:")
-            self.logger.debug(f"   • Velas analizadas: {len(tiempos)}")
-            self.logger.debug(f"   • Rango de precios: {min(minimos):.8f} - {max(maximos):.8f}")
+            self.logger.debug(f" • Velas analizadas: {len(tiempos)}")
+            self.logger.debug(f" • Rango de precios: {min(minimos):.8f} - {max(maximos):.8f}")
 
             # Calcular regresiones
             reg_max = self.calcular_regresion_lineal(tiempos_reg, maximos)
@@ -418,6 +418,7 @@ class EstrategiaBreakoutReentry:
             pendiente_cierre, intercepto_cierre = reg_close
 
             tiempo_actual = tiempos_reg[-1]
+
             resistencia_media = pendiente_max * tiempo_actual + intercepto_max
             soporte_media = pendiente_min * tiempo_actual + intercepto_min
 
@@ -449,15 +450,15 @@ class EstrategiaBreakoutReentry:
 
             # Log completo del canal calculado
             self.logger.info(f"✅ [CANAL] Canal calculado exitosamente:")
-            self.logger.info(f"   • Resistencia: {resistencia_superior:.8f}")
-            self.logger.info(f"   • Soporte: {soporte_inferior:.8f}")
-            self.logger.info(f"   • Ancho canal: {ancho_canal_absoluto:.8f} ({ancho_canal_porcentual:.2f}%)")
-            self.logger.info(f"   • Dirección: {direccion}")
-            self.logger.info(f"   • Fuerza: {fuerza_texto} (nivel {nivel_fuerza})")
-            self.logger.info(f"   • Pearson: {pearson:.4f}")
-            self.logger.info(f"   • R²: {r2_score:.4f}")
-            self.logger.info(f"   • Stochastic: K={stoch_k:.2f}, D={stoch_d:.2f}")
-            
+            self.logger.info(f" • Resistencia: {resistencia_superior:.8f}")
+            self.logger.info(f" • Soporte: {soporte_inferior:.8f}")
+            self.logger.info(f" • Ancho canal: {ancho_canal_absoluto:.8f} ({ancho_canal_porcentual:.2f}%)")
+            self.logger.info(f" • Dirección: {direccion}")
+            self.logger.info(f" • Fuerza: {fuerza_texto} (nivel {nivel_fuerza})")
+            self.logger.info(f" • Pearson: {pearson:.4f}")
+            self.logger.info(f" • R²: {r2_score:.4f}")
+            self.logger.info(f" • Stochastic: K={stoch_k:.2f}, D={stoch_d:.2f}")
+
             timestamp_fin = datetime.now()
             tiempo_calculo = (timestamp_fin - timestamp_inicio).total_seconds()
             self.logger.debug(f"⏱️ [CANAL] Tiempo de cálculo: {tiempo_calculo:.3f}s")
@@ -487,6 +488,7 @@ class EstrategiaBreakoutReentry:
                 timeframe=datos_mercado.timeframe,
                 num_velas=candle_period
             )
+
         except Exception as e:
             self.logger.error(f"❌ [CANAL] Error calculando canal de regresión: {e}")
             return None
@@ -494,6 +496,7 @@ class EstrategiaBreakoutReentry:
     def detectar_breakout(self, symbol: str, canal_info: CanalInfo, datos_mercado: DatosMercado) -> Optional[str]:
         """
         Detecta si el precio ha roto el canal con logs extensivos
+        CORRECCIÓN: Lógica de breakout corregida para coincidir con la estrategia original
         Args:
             symbol: Símbolo de trading
             canal_info: Información del canal
@@ -503,16 +506,15 @@ class EstrategiaBreakoutReentry:
         """
         try:
             timestamp_inicio = datetime.now()
-            
             if not canal_info:
                 self.logger.debug(f"🔍 [BREAKOUT] {symbol}: No hay información de canal")
                 return None
 
             self.logger.debug(f"🔍 [BREAKOUT] {symbol}: Iniciando detección...")
-            self.logger.debug(f"   • Precio actual: {datos_mercado.precio_actual:.8f}")
-            self.logger.debug(f"   • Resistencia: {canal_info.resistencia:.8f}")
-            self.logger.debug(f"   • Soporte: {canal_info.soporte:.8f}")
-            self.logger.debug(f"   • Ancho canal: {canal_info.ancho_canal_porcentual:.2f}%")
+            self.logger.debug(f" • Precio actual: {datos_mercado.precio_actual:.8f}")
+            self.logger.debug(f" • Resistencia: {canal_info.resistencia:.8f}")
+            self.logger.debug(f" • Soporte: {canal_info.soporte:.8f}")
+            self.logger.debug(f" • Ancho canal: {canal_info.ancho_canal_porcentual:.2f}%")
 
             # Filtro 1: Ancho mínimo del canal
             if canal_info.ancho_canal_porcentual < config.min_channel_width_percent:
@@ -540,49 +542,46 @@ class EstrategiaBreakoutReentry:
 
             # Todos los filtros pasaron - evaluar breakout
             self.logger.debug(f"✅ [BREAKOUT] {symbol}: Todos los filtros pasaron")
-            self.logger.debug(f"   • Dirección: {direccion}")
-            self.logger.debug(f"   • Nivel fuerza: {nivel_fuerza} (min: {Constants.MIN_NIVEL_FUERZA})")
+            self.logger.debug(f" • Dirección: {direccion}")
+            self.logger.debug(f" • Nivel fuerza: {nivel_fuerza} (min: {Constants.MIN_NIVEL_FUERZA})")
 
-            # Detección de breakout
+            # CORRECCIÓN: Lógica de breakout corregida según la estrategia original
+            # BREAKOUT_LONG: Ruptura de SOPORTE hacia arriba (salida por abajo del canal)
+            # BREAKOUT_SHORT: Ruptura de RESISTENCIA hacia abajo (salida por arriba del canal)
             if direccion == Constants.DIRECCION_ALCISTA and nivel_fuerza >= Constants.MIN_NIVEL_FUERZA:
-                if precio_cierre > resistencia:
+                if precio_cierre < soporte:  # CORREGIDO: Ruptura de SOPORTE hacia arriba
                     timestamp_fin = datetime.now()
                     tiempo_deteccion = (timestamp_fin - timestamp_inicio).total_seconds()
-                    
                     self.logger.info(f"🚀 [BREAKOUT] {symbol} - BREAKOUT LONG DETECTADO:")
-                    self.logger.info(f"   • Precio cierre: {precio_cierre:.8f}")
-                    self.logger.info(f"   • Resistencia: {resistencia:.8f}")
-                    self.logger.info(f"   • Diferencia: {(precio_cierre - resistencia):.8f} (+{((precio_cierre/resistencia - 1) * 100):.3f}%)")
-                    self.logger.info(f"   • Dirección: {direccion}")
-                    self.logger.info(f"   • Tiempo detección: {tiempo_deteccion:.3f}s")
-                    
+                    self.logger.info(f" • Precio cierre: {precio_cierre:.8f}")
+                    self.logger.info(f" • Soporte: {soporte:.8f}")
+                    self.logger.info(f" • Diferencia: {(soporte - precio_cierre):.8f} (+{((soporte/precio_cierre - 1) * 100):.3f}%)")
+                    self.logger.info(f" • Dirección: {direccion}")
+                    self.logger.info(f" • Tiempo detección: {tiempo_deteccion:.3f}s")
                     self.stats['breakouts_detectados'] += 1
                     return Constants.BREAKOUT_LONG
-                    
             elif direccion == Constants.DIRECCION_BAJISTA and nivel_fuerza >= Constants.MIN_NIVEL_FUERZA:
-                if precio_cierre < soporte:
+                if precio_cierre > resistencia:  # CORREGIDO: Ruptura de RESISTENCIA hacia abajo
                     timestamp_fin = datetime.now()
                     tiempo_deteccion = (timestamp_fin - timestamp_inicio).total_seconds()
-                    
                     self.logger.info(f"📉 [BREAKOUT] {symbol} - BREAKOUT SHORT DETECTADO:")
-                    self.logger.info(f"   • Precio cierre: {precio_cierre:.8f}")
-                    self.logger.info(f"   • Soporte: {soporte:.8f}")
-                    self.logger.info(f"   • Diferencia: {(soporte - precio_cierre):.8f} (+{((soporte/precio_cierre - 1) * 100):.3f}%)")
-                    self.logger.info(f"   • Dirección: {direccion}")
-                    self.logger.info(f"   • Tiempo detección: {tiempo_deteccion:.3f}s")
-                    
+                    self.logger.info(f" • Precio cierre: {precio_cierre:.8f}")
+                    self.logger.info(f" • Resistencia: {resistencia:.8f}")
+                    self.logger.info(f" • Diferencia: {(precio_cierre - resistencia):.8f} (+{((precio_cierre/resistencia - 1) * 100):.3f}%)")
+                    self.logger.info(f" • Dirección: {direccion}")
+                    self.logger.info(f" • Tiempo detección: {tiempo_deteccion:.3f}s")
                     self.stats['breakouts_detectados'] += 1
                     return Constants.BREAKOUT_SHORT
 
             self.logger.debug(f"💤 [BREAKOUT] {symbol}: No hay breakout activo")
             return None
-            
+
         except Exception as e:
             self.logger.error(f"❌ [BREAKOUT] Error detectando breakout en {symbol}: {e}")
             return None
 
     def detectar_reentry(self, symbol: str, canal_info: CanalInfo, datos_mercado: DatosMercado,
-                           breakout_info: Dict[str, Any]) -> Optional[str]:
+                         breakout_info: Dict[str, Any]) -> Optional[str]:
         """
         Detecta si el precio ha reingresado al canal con logs extensivos
         Args:
@@ -595,7 +594,6 @@ class EstrategiaBreakoutReentry:
         """
         try:
             timestamp_inicio = datetime.now()
-            
             if not breakout_info:
                 self.logger.debug(f"🔍 [REENTRY] {symbol}: No hay información de breakout previo")
                 return None
@@ -606,7 +604,6 @@ class EstrategiaBreakoutReentry:
             # Verificar timeout
             tiempo_desde_breakout = (datetime.now() - timestamp_breakout).total_seconds() / 60
             self.logger.debug(f"⏰ [REENTRY] {symbol}: Tiempo desde breakout: {tiempo_desde_breakout:.1f} min")
-            
             if tiempo_desde_breakout > Constants.TIMEOUT_REENTRY_MINUTOS:
                 self.logger.info(f"⏰ [REENTRY] {symbol}: Timeout de reentry ({tiempo_desde_breakout:.1f} > {Constants.TIMEOUT_REENTRY_MINUTOS} min), cancelando espera")
                 return None
@@ -616,34 +613,30 @@ class EstrategiaBreakoutReentry:
             soporte = canal_info.soporte
             stoch_k = canal_info.stoch_k
             stoch_d = canal_info.stoch_d
-
-            tolerancia = 0.001 * precio_actual
+            tolerancia = 0.001 * precio_actual # 0.1% de tolerancia para el reingreso
 
             self.logger.debug(f"🔍 [REENTRY] {symbol}: Analizando reentry...")
-            self.logger.debug(f"   • Tipo breakout: {tipo_breakout}")
-            self.logger.debug(f"   • Precio actual: {precio_actual:.8f}")
-            self.logger.debug(f"   • Rango canal: {soporte:.8f} - {resistencia:.8f}")
-            self.logger.debug(f"   • Stochastic K: {stoch_k:.2f}")
-            self.logger.debug(f"   • Tolerancia: {tolerancia:.8f}")
+            self.logger.debug(f" • Tipo breakout: {tipo_breakout}")
+            self.logger.debug(f" • Precio actual: {precio_actual:.8f}")
+            self.logger.debug(f" • Rango canal: {soporte:.8f} - {resistencia:.8f}")
+            self.logger.debug(f" • Stochastic K: {stoch_k:.2f}")
+            self.logger.debug(f" • Tolerancia: {tolerancia:.8f}")
 
             if tipo_breakout == Constants.BREAKOUT_LONG:
                 # Verificar reentry desde soporte hacia arriba
                 if soporte <= precio_actual <= resistencia:
                     distancia_soporte = abs(precio_actual - soporte)
                     self.logger.debug(f"📊 [REENTRY] {symbol}: Precio dentro del canal")
-                    self.logger.debug(f"   • Distancia a soporte: {distancia_soporte:.8f}")
-                    
+                    self.logger.debug(f" • Distancia a soporte: {distancia_soporte:.8f}")
                     if distancia_soporte <= tolerancia and stoch_k <= Constants.STOCH_OVERSOLD:
                         timestamp_fin = datetime.now()
                         tiempo_deteccion = (timestamp_fin - timestamp_inicio).total_seconds()
-                        
                         self.logger.info(f"✅ [REENTRY] {symbol} - REENTRY LONG CONFIRMADO:")
-                        self.logger.info(f"   • Precio entrada: {precio_actual:.8f}")
-                        self.logger.info(f"   • Soporte: {soporte:.8f}")
-                        self.logger.info(f"   • Stochastic K: {stoch_k:.2f} (<= {Constants.STOCH_OVERSOLD})")
-                        self.logger.info(f"   • Distancia soporte: {distancia_soporte:.8f}")
-                        self.logger.info(f"   • Tiempo detección: {tiempo_deteccion:.3f}s")
-                        
+                        self.logger.info(f" • Precio entrada: {precio_actual:.8f}")
+                        self.logger.info(f" • Soporte: {soporte:.8f}")
+                        self.logger.info(f" • Stochastic K: {stoch_k:.2f} (<= {Constants.STOCH_OVERSOLD})")
+                        self.logger.info(f" • Distancia soporte: {distancia_soporte:.8f}")
+                        self.logger.info(f" • Tiempo detección: {tiempo_deteccion:.3f}s")
                         self.stats['reentries_detectados'] += 1
                         return Constants.OPERACION_LONG
                     else:
@@ -651,25 +644,21 @@ class EstrategiaBreakoutReentry:
                             self.logger.debug(f"❌ [REENTRY] {symbol}: Lejos del soporte ({distancia_soporte:.8f} > {tolerancia:.8f})")
                         if stoch_k > Constants.STOCH_OVERSOLD:
                             self.logger.debug(f"❌ [REENTRY] {symbol}: Stochastic K muy alto ({stoch_k:.2f} > {Constants.STOCH_OVERSOLD})")
-                            
             elif tipo_breakout == Constants.BREAKOUT_SHORT:
                 # Verificar reentry desde resistencia hacia abajo
                 if soporte <= precio_actual <= resistencia:
                     distancia_resistencia = abs(precio_actual - resistencia)
                     self.logger.debug(f"📊 [REENTRY] {symbol}: Precio dentro del canal")
-                    self.logger.debug(f"   • Distancia a resistencia: {distancia_resistencia:.8f}")
-                    
+                    self.logger.debug(f" • Distancia a resistencia: {distancia_resistencia:.8f}")
                     if distancia_resistencia <= tolerancia and stoch_k >= Constants.STOCH_OVERBOUGHT:
                         timestamp_fin = datetime.now()
                         tiempo_deteccion = (timestamp_fin - timestamp_inicio).total_seconds()
-                        
                         self.logger.info(f"✅ [REENTRY] {symbol} - REENTRY SHORT CONFIRMADO:")
-                        self.logger.info(f"   • Precio entrada: {precio_actual:.8f}")
-                        self.logger.info(f"   • Resistencia: {resistencia:.8f}")
-                        self.logger.info(f"   • Stochastic K: {stoch_k:.2f} (>= {Constants.STOCH_OVERBOUGHT})")
-                        self.logger.info(f"   • Distancia resistencia: {distancia_resistencia:.8f}")
-                        self.logger.info(f"   • Tiempo detección: {tiempo_deteccion:.3f}s")
-                        
+                        self.logger.info(f" • Precio entrada: {precio_actual:.8f}")
+                        self.logger.info(f" • Resistencia: {resistencia:.8f}")
+                        self.logger.info(f" • Stochastic K: {stoch_k:.2f} (>= {Constants.STOCH_OVERBOUGHT})")
+                        self.logger.info(f" • Distancia resistencia: {distancia_resistencia:.8f}")
+                        self.logger.info(f" • Tiempo detección: {tiempo_deteccion:.3f}s")
                         self.stats['reentries_detectados'] += 1
                         return Constants.OPERACION_SHORT
                     else:
@@ -680,7 +669,7 @@ class EstrategiaBreakoutReentry:
 
             self.logger.debug(f"💤 [REENTRY] {symbol}: No hay reentry confirmado")
             return None
-            
+
         except Exception as e:
             self.logger.error(f"❌ [REENTRY] Error detectando reentry en {symbol}: {e}")
             return None
@@ -697,20 +686,18 @@ class EstrategiaBreakoutReentry:
         """
         try:
             timestamp_inicio = datetime.now()
-            
             if not canal_info:
                 self.logger.debug(f"🔍 [NIVELES] No hay información de canal")
                 return None, None, None
 
             self.logger.debug(f"💰 [NIVELES] Calculando niveles para operación {tipo_operacion}")
-            self.logger.debug(f"   • Precio actual: {precio_actual:.8f}")
-            self.logger.debug(f"   • Canal: {canal_info.soporte:.8f} - {canal_info.resistencia:.8f}")
+            self.logger.debug(f" • Precio actual: {precio_actual:.8f}")
+            self.logger.debug(f" • Canal: {canal_info.soporte:.8f} - {canal_info.resistencia:.8f}")
 
             resistencia = canal_info.resistencia
             soporte = canal_info.soporte
             ancho_canal = resistencia - soporte
-
-            sl_porcentaje = 0.02
+            sl_porcentaje = 0.02 # Ejemplo, se podría parametrizar
 
             if tipo_operacion == Constants.OPERACION_LONG:
                 precio_entrada = precio_actual
@@ -727,12 +714,12 @@ class EstrategiaBreakoutReentry:
             ratio_rr = beneficio / riesgo if riesgo > 0 else 0
 
             self.logger.debug(f"📊 [NIVELES] Cálculo inicial:")
-            self.logger.debug(f"   • Entrada: {precio_entrada:.8f}")
-            self.logger.debug(f"   • Take Profit: {take_profit:.8f}")
-            self.logger.debug(f"   • Stop Loss: {stop_loss:.8f}")
-            self.logger.debug(f"   • Riesgo: {riesgo:.8f}")
-            self.logger.debug(f"   • Beneficio: {beneficio:.8f}")
-            self.logger.debug(f"   • Ratio R/R: {ratio_rr:.2f}")
+            self.logger.debug(f" • Entrada: {precio_entrada:.8f}")
+            self.logger.debug(f" • Take Profit: {take_profit:.8f}")
+            self.logger.debug(f" • Stop Loss: {stop_loss:.8f}")
+            self.logger.debug(f" • Riesgo: {riesgo:.8f}")
+            self.logger.debug(f" • Beneficio: {beneficio:.8f}")
+            self.logger.debug(f" • Ratio R/R: {ratio_rr:.2f}")
 
             # Ajustar take profit si el ratio es muy bajo
             if ratio_rr < config.min_rr_ratio:
@@ -741,30 +728,28 @@ class EstrategiaBreakoutReentry:
                     take_profit = precio_entrada + (riesgo * config.min_rr_ratio)
                 else:
                     take_profit = precio_entrada - (riesgo * config.min_rr_ratio)
-                
+
                 # Recalcular ratio
                 beneficio_ajustado = abs(take_profit - precio_entrada)
                 ratio_rr_ajustado = beneficio_ajustado / riesgo if riesgo > 0 else 0
-                
+
                 self.logger.debug(f"⚠️ [NIVELES] Ratio R/R ajustado:")
-                self.logger.debug(f"   • Ratio original: {ratio_original:.2f} < {config.min_rr_ratio}")
-                self.logger.debug(f"   • Take Profit ajustado: {take_profit:.8f}")
-                self.logger.debug(f"   • Nuevo ratio R/R: {ratio_rr_ajustado:.2f}")
+                self.logger.debug(f" • Ratio original: {ratio_original:.2f} < {config.min_rr_ratio}")
+                self.logger.debug(f" • Take Profit ajustado: {take_profit:.8f}")
+                self.logger.debug(f" • Nuevo ratio R/R: {ratio_rr_ajustado:.2f}")
 
             timestamp_fin = datetime.now()
             tiempo_calculo = (timestamp_fin - timestamp_inicio).total_seconds()
-
             self.logger.info(f"✅ [NIVELES] {tipo_operacion} calculados:")
-            self.logger.info(f"   • Entrada: {precio_entrada:.8f}")
-            self.logger.info(f"   • Take Profit: {take_profit:.8f}")
-            self.logger.info(f"   • Stop Loss: {stop_loss:.8f}")
-            self.logger.info(f"   • Ratio R/R: {ratio_rr:.2f}")
-            self.logger.info(f"   • Tiempo cálculo: {tiempo_calculo:.3f}s")
-            
-            self.stats['operaciones_calculadas'] += 1
+            self.logger.info(f" • Entrada: {precio_entrada:.8f}")
+            self.logger.info(f" • Take Profit: {take_profit:.8f}")
+            self.logger.info(f" • Stop Loss: {stop_loss:.8f}")
+            self.logger.info(f" • Ratio R/R: {ratio_rr:.2f}")
+            self.logger.info(f" • Tiempo cálculo: {tiempo_calculo:.3f}s")
 
+            self.stats['operaciones_calculadas'] += 1
             return precio_entrada, take_profit, stop_loss
-            
+
         except Exception as e:
             self.logger.error(f"❌ [NIVELES] Error calculando niveles de entrada: {e}")
             return None, None, None
