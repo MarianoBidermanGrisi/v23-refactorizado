@@ -29,7 +29,7 @@ class ConfigSettings:
             self.min_trend_strength_degrees = float(os.environ.get('MIN_TREND_STRENGTH_DEGREES', '16.0'))
             self.entry_margin = float(os.environ.get('ENTRY_MARGIN', '0.001'))
             self.min_rr_ratio = float(os.environ.get('MIN_RR_RATIO', '1.2'))
-            self.scan_interval_minutes = int(os.environ.get('SCAN_INTERVAL_MINUTES', '1'))
+            self.scan_interval_minutes = int(os.environ.get('SCAN_INTERVAL_MINUTES', '3'))
             
             # Timeframes y velas
             timeframes_env = os.environ.get('TIMEFRAMES', '5m,15m,30m,1h,4h')
@@ -157,3 +157,4 @@ LOGGING_CONFIG = {
 }
 
 logger.info("📋 Configuración y constantes cargadas correctamente")
+
