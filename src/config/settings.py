@@ -1,7 +1,7 @@
 """
 Configuración y constantes del bot de trading.
-Contiene todas las configuraciones cargadas desde variables de entorno.
-CORREGIDO: Sin dependencias circulares
+Contiene todas las configuraciones cargadas ÚNICAMENTE desde variables de entorno.
+CORREGIDO: Sin valores por defecto hardcodeados - Solo variables de entorno de Render
 """
 import os
 import logging
@@ -10,50 +10,68 @@ from typing import List, Dict, Any
 # Configurar logger para este módulo
 logger = logging.getLogger(__name__)
 
-
 class ConfigSettings:
-    """Configuración centralizada del bot desde variables de entorno"""
+    """Configuración centralizada del bot desde variables de entorno ÚNICAMENTE"""
 
     def __init__(self):
         self.directory_actual = os.path.dirname(os.path.abspath(__file__))
         self._cargar_configuracion_desde_entorno()
 
     def _cargar_configuracion_desde_entorno(self):
-        """Carga toda la configuración desde variables de entorno"""
+        """Carga toda la configuración DESDE VARIABLES DE ENVIRONMENT DE RENDER"""
         try:
-            # Cargar chat IDs de Telegram
-            telegram_chat_ids_str = os.environ.get('TELEGRAM_CHAT_ID', '-1002272872445')
+            # Cargar chat IDs de Telegram - REQUERIDO
+            telegram_chat_ids_str = os.environ.get('TELEGRAM_CHAT_ID')
+            if not telegram_chat_ids_str:
+                raise ValueError("❌ TELEGRAM_CHAT_ID es REQUERIDO - Configurar en variables de entorno de Render")
             self.telegram_chat_ids = [cid.strip() for cid in telegram_chat_ids_str.split(',') if cid.strip()]
+            
+            # Configuración del trading - REQUERIDA
+            self.min_channel_width_percent = float(os.environ.get('MIN_CHANNEL_WIDTH_PERCENT'))
+            self.trend_threshold_degrees = float(os.environ.get('TREND_THRESHOLD_DEGREES'))
+            self.min_trend_strength_degrees = float(os.environ.get('MIN_TREND_STRENGTH_DEGREES'))
+            self.entry_margin = float(os.environ.get('ENTRY_MARGIN'))
+            self.min_rr_ratio = float(os.environ.get('MIN_RR_RATIO'))
+            self.scan_interval_minutes = int(os.environ.get('SCAN_INTERVAL_MINUTES'))
 
-            # Configuración del trading
-            self.min_channel_width_percent = float(os.environ.get('MIN_CHANNEL_WIDTH_PERCENT', '4.0'))
-            self.trend_threshold_degrees = float(os.environ.get('TREND_THRESHOLD_DEGREES', '16.0'))
-            self.min_trend_strength_degrees = float(os.environ.get('MIN_TREND_STRENGTH_DEGREES', '16.0'))
-            self.entry_margin = float(os.environ.get('ENTRY_MARGIN', '0.001'))
-            self.min_rr_ratio = float(os.environ.get('MIN_RR_RATIO', '1.2'))
-            self.scan_interval_minutes = int(os.environ.get('SCAN_INTERVAL_MINUTES', '3'))
-
-            # Timeframes y velas
-            timeframes_env = os.environ.get('TIMEFRAMES', '5m,15m,30m,1h,4h')
+            # Timeframes y velas - REQUERIDOS
+            timeframes_env = os.environ.get('TIMEFRAMES')
+            if not timeframes_env:
+                raise ValueError("❌ TIMEFRAMES es REQUERIDO - Configurar en variables de entorno de Render")
             self.timeframes = [tf.strip() for tf in timeframes_env.split(',')]
-            velas_env = os.environ.get('VELAS_OPTIONS', '80,100,120,150,200')
+            
+            velas_env = os.environ.get('VELAS_OPTIONS')
+            if not velas_env:
+                raise ValueError("❌ VELAS_OPTIONS es REQUERIDO - Configurar en variables de entorno de Render")
             self.velas_options = [int(v) for v in velas_env.split(',')]
 
-            # Símbolos de trading
-            symbols_env = os.environ.get('SYMBOLS',
-                                          'BTCUSDT,ETHUSDT,DOTUSDT,LINKUSDT,BNBUSDT,XRPUSDT,SOLUSDT,AVAXUSDT,DOGEUSDT,LTCUSDT,ATOMUSDT,XLMUSDT,ALGOUSDT,VETUSDT,ICPUSDT,FILUSDT,BCHUSDT,EOSUSDT,TRXUSDT,XTZUSDT,SUSHIUSDT,COMPUSDT,YFIUSDT,ETCUSDT,SNXUSDT,RENUSDT,1INCHUSDT,NEOUSDT,ZILUSDT,HOTUSDT,ENJUSDT,ZECUSDT'
-                                          )
+            # Símbolos de trading - REQUERIDO
+            symbols_env = os.environ.get('SYMBOLS')
+            if not symbols_env:
+                raise ValueError("❌ SYMBOLS es REQUERIDO - Configurar en variables de entorno de Render")
             self.symbols = [symbol.strip() for symbol in symbols_env.split(',')]
 
-            # Tokens y configuraciones de APIs
+            # Tokens y configuraciones de APIs - REQUERIDOS
             self.telegram_token = os.environ.get('TELEGRAM_TOKEN')
+            if not self.telegram_token:
+                raise ValueError("❌ TELEGRAM_TOKEN es REQUERIDO - Configurar en variables de entorno de Render")
+            
             self.webhook_url = os.environ.get('WEBHOOK_URL')
+            if not self.webhook_url:
+                raise ValueError("❌ WEBHOOK_URL es REQUERIDO - Configurar en variables de entorno de Render")
+            
             self.render_url = os.environ.get('RENDER_EXTERNAL_URL')
+            if not self.render_url:
+                raise ValueError("❌ RENDER_EXTERNAL_URL es REQUERIDO - Configurar en variables de entorno de Render")
 
-            # Configuración de optimización
-            self.auto_optimize = os.environ.get('AUTO_OPTIMIZE', 'true').lower() == 'true'
-            self.min_samples_optimizacion = int(os.environ.get('MIN_SAMPLES_OPTIMIZACION', '30'))
-            self.reevaluacion_horas = int(os.environ.get('REEVALUACION_HORAS', '24'))
+            # Configuración de optimización - REQUERIDA
+            self.auto_optimize = os.environ.get('AUTO_OPTIMIZE')
+            if not self.auto_optimize:
+                raise ValueError("❌ AUTO_OPTIMIZE es REQUERIDO - Configurar en variables de entorno de Render")
+            self.auto_optimize = self.auto_optimize.lower() == 'true'
+            
+            self.min_samples_optimizacion = int(os.environ.get('MIN_SAMPLES_OPTIMIZACION'))
+            self.reevaluacion_horas = int(os.environ.get('REEVALUACION_HORAS'))
 
             # Rutas de archivos
             self.log_path = os.path.join(self.directory_actual, 'operaciones_log_v23.csv')
@@ -61,20 +79,35 @@ class ConfigSettings:
             self.mejores_parametros_file = 'mejores_parametros.json'
             self.ultimo_reporte_file = 'ultimo_reporte.txt'
 
-            # URLs de APIs
+            # URLs de APIs - REQUERIDO
             self.binance_api_base = 'https://api.binance.com'
             self.binance_klines_endpoint = '/api/v3/klines'
-            self.binance_api_key = os.environ.get('BINANCE_API_KEY', '')
+            self.binance_api_key = os.environ.get('BINANCE_API_KEY')
+            if not self.binance_api_key:
+                raise ValueError("❌ BINANCE_API_KEY es REQUERIDO - Configurar en variables de entorno de Render")
+            
             self.telegram_api_base = f'https://api.telegram.org'
 
-            # Configuración Flask
-            self.flask_port = int(os.environ.get('PORT', '5000'))
-            self.flask_debug = os.environ.get('FLASK_DEBUG', 'false').lower() == 'true'
+            # Configuración Flask - REQUERIDA
+            self.flask_port = int(os.environ.get('PORT'))
+            if not self.flask_port:
+                raise ValueError("❌ PORT es REQUERIDO - Configurar en variables de entorno de Render")
+            
+            self.flask_debug = os.environ.get('FLASK_DEBUG')
+            if not self.flask_debug:
+                raise ValueError("❌ FLASK_DEBUG es REQUERIDO - Configurar en variables de entorno de Render")
+            self.flask_debug = self.flask_debug.lower() == 'true'
 
-            logger.info("✅ Configuración cargada correctamente desde variables de entorno")
-            logger.info(f" 📊 Símbolos: {len(self.symbols)}")
-            logger.info(f" ⏰ Timeframes: {', '.join(self.timeframes)}")
-            logger.info(f" 🕯️ Velas: {', '.join(map(str, self.velas_options))}")
+            logger.info("✅ Configuración cargada correctamente DESDE VARIABLES DE ENTORNO DE RENDER")
+            logger.info(f" 📊 Símbolos configurados: {len(self.symbols)}")
+            logger.info(f" ⏰ Timeframes configurados: {', '.join(self.timeframes)}")
+            logger.info(f" 🕯️ Velas configuradas: {', '.join(map(str, self.velas_options))}")
+            logger.info(f" 📱 Telegram configurado: {'✅' if self.telegram_token else '❌'}")
+            logger.info(f" 🤖 Auto-optimización: {'✅' if self.auto_optimize else '❌'}")
+
+        except ValueError as e:
+            logger.error(f"❌ Error en configuración - Variable de entorno faltante: {e}")
+            raise
         except Exception as e:
             logger.error(f"❌ Error cargando configuración: {e}")
             raise
@@ -100,14 +133,12 @@ class ConfigSettings:
             'estado_file': self.estado_file
         }
 
-
 # Instancia global de configuración
 config = ConfigSettings()
 
-
-# Constantes del sistema
+# Constantes del sistema (NO MODIFICADAS)
 class Constants:
-    """Constantes del sistema que no cambian"""
+    """Constantes del sistema que no cambian - LÓGICA DE TRADING INTACTA"""
     # Estados de operación
     OPERACION_TP = "TP"
     OPERACION_SL = "SL"
@@ -150,12 +181,12 @@ class Constants:
     LOG_LEVEL = "INFO"
     LOG_FORMAT = '%(asctime)s - %(levelname)s - %(message)s'
 
-
 # Configuración de logging - DEFINIDA DESPUÉS DE Constants PARA EVITAR PROBLEMAS
 LOGGING_CONFIG = {
     'level': Constants.LOG_LEVEL,
     'format': Constants.LOG_FORMAT,
-    'stream': None  # Se configura en el módulo principal
+    'stream': None # Se configura en el módulo principal
 }
 
 logger.info("📋 Configuración y constantes cargadas correctamente")
+logger.info("🔒 MODO RENDER: Solo variables de entorno configuradas en Render.com")
