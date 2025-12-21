@@ -10,9 +10,9 @@ from ..config.settings import Constants, LOGGING_CONFIG
 def configurar_logging():
     """Configura el sistema de logging del bot"""
     try:
-        # Usar valores directos en lugar de Constants para evitar problemas de importación
-        log_format = Constants.LOG_FORMAT  # Esto está bien aquí porque se ejecuta después de importar
-        log_level = Constants.LOG_LEVEL
+        # Usar LOGGING_CONFIG importado para evitar problemas de dependencias
+        log_format = LOGGING_CONFIG['format']
+        log_level = LOGGING_CONFIG['level']
         
         # Configurar formato
         formatter = logging.Formatter(
@@ -23,18 +23,19 @@ def configurar_logging():
         # Configurar nivel
         level = getattr(logging, log_level.upper(), logging.INFO)
 
-        # Handler para consola (stdout)
+        # Handler para consola (separando stdout y stderr)
         console_handler = logging.StreamHandler(sys.stdout)
-        console_handler.setLevel(level)
-        console_handler.setFormatter(formatter)
+        error_handler = logging.StreamHandler(sys.stderr)
 
-        # Handler para archivo (opcional)
+        # Handler para archivo con rotación
         try:
-            file_handler = logging.FileHandler('bot_trading.log', encoding='utf-8')
+            from logging.handlers import RotatingFileHandler
+            file_handler = RotatingFileHandler('bot_trading.log', maxBytes=10*1024*1024, backupCount=5, encoding='utf-8')
             file_handler.setLevel(level)
             file_handler.setFormatter(formatter)
         except Exception as e:
-            print(f"⚠️ No se pudo crear handler de archivo: {e}")
+            # Usar sys.stderr directamente ya que el logging aún no está configurado
+            sys.stderr.write(f"⚠️ No se pudo crear handler de archivo: {e}\n")
             file_handler = None
 
         # Configurar logger principal
@@ -45,8 +46,9 @@ def configurar_logging():
         for handler in logger.handlers[:]:
             logger.removeHandler(handler)
 
-        # Agregar handlers
+        # Agregar handlers (INFO+ para stdout, ERROR+ para stderr, todo para archivo)
         logger.addHandler(console_handler)
+        logger.addHandler(error_handler)
         if file_handler:
             logger.addHandler(file_handler)
 
@@ -54,10 +56,12 @@ def configurar_logging():
         logging.getLogger('requests').setLevel(logging.WARNING)
         logging.getLogger('urllib3').setLevel(logging.WARNING)
 
-        print("📝 Sistema de logging configurado correctamente")
+        # Usar el logger configurado
+        logger.info("📝 Sistema de logging configurado correctamente")
         return logger
     except Exception as e:
-        print(f"❌ Error configurando logging: {e}")
+        # Usar stderr directamente ya que el logging aún no está configurado
+        sys.stderr.write(f"❌ Error configurando logging: {e}\n")
         # Fallback a configuración básica con valores directos
         logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
         return logging.getLogger()
@@ -78,10 +82,11 @@ def obtener_logger(nombre: str = None) -> logging.Logger:
 # Configurar logging al importar - SIN CAMBIOS EN LA LÓGICA DE TRADING
 try:
     logger_base = configurar_logging()
-    print("🔧 Logging configurado")
+    logger_base.info("🔧 Logging configurado")
 except Exception as e:
-    print(f"⚠️ Error configurando logging durante importación: {e}")
+    # Usar stderr directamente
+    sys.stderr.write(f"⚠️ Error configurando logging durante importación: {e}\n")
     # Configuración de emergencia sin Constants
     logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
     logger_base = logging.getLogger()
-    print("🔧 Logging configurado (modo emergencia)")
+    logger_base.info("🔧 Logging configurado (modo emergencia)")
