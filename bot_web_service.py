@@ -85,14 +85,12 @@ def log_detalle_simbolo(simbolo, timeframe, num_velas, direccion, angulo, fuerza
     
     return f"📊 {simbolo} - {timeframe} - {num_velas}v | {emoji_direccion} {direccion} ({angulo_str}° - {emoji_fuerza} {fuerza_texto}) | Ancho: {ancho_canal_porcentual:.1f}% - Stoch: {stoch_k:.1f}/{stoch_d:.1f} {emoji_stoch} {stoch_estado} | Precio: {emoji_precio}"
 
-def log_detalle_breakout(simbolo, tipo_breakout, precio_breakout, nivel_ruptura):
+def log_detalle_breakout(simbolo, tipo_breakout, precio_breakout, nivel_ruptura, direccion_ruptura):
     """Genera línea de logging detallada para un breakout"""
-    if tipo_breakout == "ALCISTA":
-        comparacion = f"> Resistencia: {nivel_ruptura:.8f}"
+    if direccion_ruptura == 'ARRIBA':
+        return f"🚀 {simbolo} - BREAKOUT {tipo_breakout}: {precio_breakout:.8f} ↑ Ruptura resistencia: {nivel_ruptura:.8f}"
     else:
-        comparacion = f"< Soporte: {nivel_ruptura:.8f}"
-    
-    return f"🚀 {simbolo} - BREAKOUT {tipo_breakout}: {precio_breakout:.8f} {comparacion}"
+        return f"🚀 {simbolo} - BREAKOUT {tipo_breakout}: {precio_breakout:.8f} ↓ Ruptura soporte: {nivel_ruptura:.8f}"
 
 # Configurar logging básico
 logging.basicConfig(level=logging.INFO, stream=sys.stdout, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -1127,20 +1125,54 @@ def calcular_lineas_tendencia(datos, num_velas=80):
     
     x = np.arange(len(cierres))
     
+    # Calcular línea de tendencia central (regresión lineal)
     pendiente, intercepto = np.polyfit(x, cierres, 1)
     
-    resistencia_valores = pendiente * x + (intercepto + (np.max(cierres) - np.mean(cierres)))
-    soporte_valores = pendiente * x + (intercepto - (np.mean(cierres) - np.min(cierres)))
+    # Calcular rango del precio para el canal
+    precio_max = np.max(cierres)
+    precio_min = np.min(cierres)
+    rango = precio_max - precio_min
+    
+    # La línea de resistencia pasa por el precio máximo
+    # La línea de soporte pasa por el precio mínimo
+    # Ambas líneas tienen la MISMA pendiente que la tendencia central
+    
+    # Calcular interceptos para líneas paralelas
+    # Resistencia: pasa por precio_max
+    intercepto_resistencia = precio_max - pendiente * (len(cierres) - 1)
+    
+    # Soporte: pasa por precio_min
+    intercepto_soporte = precio_min - pendiente * (len(cierres) - 1)
+    
+    # Calcular valores actuales (en el punto final)
+    x_final = len(cierres) - 1
+    resistencia_actual = pendiente * x_final + intercepto_resistencia
+    soporte_actual = pendiente * x_final + intercepto_soporte
+    
+    # Determinar dirección de la tendencia
+    if abs(pendiente) < 1e-10:
+        direccion = "RANGO"
+    elif pendiente > 0:
+        direccion = "ALCISTA"
+    else:
+        direccion = "BAJISTA"
     
     return {
         'pendiente': pendiente,
         'intercepto': intercepto,
-        'resistencia': np.max(cierres),
-        'soporte': np.min(cierres),
-        'resistencia_actual': pendiente * len(cierres) + (intercepto + (np.max(cierres) - np.mean(cierres))),
-        'soporte_actual': pendiente * len(cierres) + (intercepto - (np.mean(cierres) - np.min(cierres))),
+        'intercepto_resistencia': intercepto_resistencia,
+        'intercepto_soporte': intercepto_soporte,
+        'resistencia': precio_max,
+        'soporte': precio_min,
+        'resistencia_actual': resistencia_actual,
+        'soporte_actual': soporte_actual,
+        'ancho_canal': rango,
+        'ancho_canal_porcentual': (rango / precio_min) * 100 if precio_min > 0 else 0,
         'pendiente_resistencia': pendiente,
-        'pendiente_soporte': pendiente
+        'pendiente_soporte': pendiente,
+        'direccion': direccion,
+        'resistencia_values': pendiente * x + intercepto_resistencia,
+        'soporte_values': pendiente * x + intercepto_soporte
     }
 
 def calcular_angulo_tendencia(datos, num_velas=80):
@@ -1185,25 +1217,70 @@ def calcular_coeficiente_pearson(datos, num_velas=80):
     
     return numerador / denominador
 
-def detectar_breakout(info_canal, precio_actual):
+def detectar_breakout(info_canal, precio_actual, datos=None):
+    """
+    Detecta si el precio ha hecho breakout del canal.
+    
+    Un breakout ALCISTA ocurre cuando:
+    - La tendencia es ALCISTA (pendiente > 0)
+    - El precio rompe por encima de la resistencia dinámica
+    
+    Un breakout BAJISTA ocurre cuando:
+    - La tendencia es BAJISTA (pendiente < 0)  
+    - El precio rompe por debajo del soporte dinámico
+    
+    Returns: {
+        'tipo': 'ALCISTA' | 'BAJISTA',
+        'precio_breakout': precio al que rompió,
+        'nivel_ruptura': nivel técnico que rompió,
+        ' direccion_ruptura': 'ARRIBA' | 'ABAJO'
+    }
+    """
     if not info_canal:
         return None
     
-    resistencia = info_canal['resistencia_actual'] if 'resistencia_actual' in info_canal else info_canal['resistencia']
-    soporte = info_canal['soporte_actual'] if 'soporte_actual' in info_canal else info_canal['soporte']
+    resistencia = info_canal.get('resistencia_actual', info_canal.get('resistencia', precio_actual))
+    soporte = info_canal.get('soporte_actual', info_canal.get('soporte', precio_actual))
+    pendiente = info_canal.get('pendiente', 0)
     
-    if precio_actual >= resistencia:
-        return {
-            'tipo': 'ALCISTA',
-            'precio_breakout': precio_actual,
-            'nivel_ruptura': resistencia
-        }
-    elif precio_actual <= soporte:
-        return {
-            'tipo': 'BAJISTA',
-            'precio_breakout': precio_actual,
-            'nivel_ruptura': soporte
-        }
+    # Determinar dirección de la tendencia
+    if abs(pendiente) < 1e-10:
+        # Sin tendencia clara, usar lógica tradicional
+        if precio_actual >= resistencia:
+            return {
+                'tipo': 'ALCISTA',
+                'precio_breakout': precio_actual,
+                'nivel_ruptura': resistencia,
+                'direccion_ruptura': 'ARRIBA'
+            }
+        elif precio_actual <= soporte:
+            return {
+                'tipo': 'BAJISTA',
+                'precio_breakout': precio_actual,
+                'nivel_ruptura': soporte,
+                'direccion_ruptura': 'ABAJO'
+            }
+        return None
+    
+    # Tendencia ALCISTA: solo contar breakout ALCISTA (rompiendo resistencia)
+    if pendiente > 0:
+        if precio_actual >= resistencia:
+            return {
+                'tipo': 'ALCISTA',
+                'precio_breakout': precio_actual,
+                'nivel_ruptura': resistencia,
+                'direccion_ruptura': 'ARRIBA'
+            }
+    
+    # Tendencia BAJISTA: solo contar breakout BAJISTA (rompiendo soporte)
+    elif pendiente < 0:
+        if precio_actual <= soporte:
+            return {
+                'tipo': 'BAJISTA',
+                'precio_breakout': precio_actual,
+                'nivel_ruptura': soporte,
+                'direccion_ruptura': 'ABAJO'
+            }
     
     return None
 
@@ -1554,9 +1631,7 @@ class TradingBot:
                         if not info_canal:
                             continue
                         
-                        info_canal.update(calcular_soporte_resistencia(datos, num_velas))
-                        if not info_canal:
-                            continue
+                        # calcular_soporte_resistencia ya no es necesario ya que calcular_lineas_tendencia incluye todos los valores
                         
                         ancho_canal_pct = info_canal.get('ancho_canal_porcentual', 0)
                         min_ancho = self.config.get('min_channel_width_percent', 4)
@@ -1632,7 +1707,8 @@ class TradingBot:
                             linea_breakout = log_detalle_breakout(
                                 simbolo, breakout_info['tipo'], 
                                 breakout_info['precio_breakout'], 
-                                breakout_info['nivel_ruptura']
+                                breakout_info['nivel_ruptura'],
+                                breakout_info.get('direccion_ruptura', 'ARRIBA')
                             )
                             print(f"   {linea_breakout}")
                             
@@ -1658,18 +1734,19 @@ class TradingBot:
                                         time.sleep(1)
                                     
                                     # Mensaje de texto detallado
-                                    msg_breakout = f"🚀 <b>BREAKOUT DETECTADO</b>\n\n"
+                                    direccion_emoji = "⬆️" if breakout_info.get('direccion_ruptura') == 'ARRIBA' else "⬇️"
+                                    msg_breakout = f"🚀 <b>BREAKOUT DETECTADO</b> {direccion_emoji}\n\n"
                                     msg_breakout += f"Símbolo: <b>{simbolo}</b>\n"
                                     msg_breakout += f"Tipo: <b>{breakout_info['tipo']}</b>\n"
                                     msg_breakout += f"Timeframe: {timeframe}\n"
-                                    msg_breakout += f"Precio Breakout: {breakout_info['precio_breakout']:.8f}\n"
+                                    msg_breakout += f"Precio Actual: {precio_actual:.8f}\n"
                                     msg_breakout += f"Nivel Ruptura: {breakout_info['nivel_ruptura']:.8f}\n"
-                                    msg_breakout += f"Dirección: {direccion} ({angulo:.1f}°)\n"
+                                    msg_breakout += f"Tendencia: {direccion} ({angulo:.1f}°)\n"
                                     msg_breakout += f"Fuerza: {fuerza_texto}\n"
                                     msg_breakout += f"Ancho Canal: {ancho_canal_pct:.1f}%\n"
                                     msg_breakout += f"Stochastic: {stoch_k:.1f}/{stoch_d:.1f} ({stoch_estado})\n"
                                     msg_breakout += f"Hora: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
-                                    msg_breakout += f"\n⏳ <i>Esperando reentry para confirmar señal...</i>"
+                                    msg_breakout += f"\n⏳ <i>Esperando reentry para confirmar operación...</i>"
                                     
                                     self._enviar_telegram_simple(msg_breakout, token, chat_ids)
                                     print(f"      ✅ Alerta de breakout enviada para {simbolo}")
@@ -2311,16 +2388,22 @@ Velas: {datos_operacion.get('velas_utilizadas', 0)}
                 df.set_index('Date', inplace=True)
             
             tiempos_reg = list(range(len(df)))
-            resistencia_values = []
-            soporte_values = []
             
-            for i, t in enumerate(tiempos_reg):
-                resist = info_canal['pendiente_resistencia'] * t + \
-                        (info_canal['resistencia'] - info_canal['pendiente_resistencia'] * tiempos_reg[-1])
-                sop = info_canal['pendiente_soporte'] * t + \
-                     (info_canal['soporte'] - info_canal['pendiente_soporte'] * tiempos_reg[-1])
-                resistencia_values.append(resist)
-                soporte_values.append(sop)
+            # Usar los interceptos corregidos para líneas paralelas
+            if 'intercepto_resistencia' in info_canal and 'intercepto_soporte' in info_canal:
+                resistencia_values = [info_canal['pendiente_resistencia'] * t + info_canal['intercepto_resistencia'] for t in tiempos_reg]
+                soporte_values = [info_canal['pendiente_soporte'] * t + info_canal['intercepto_soporte'] for t in tiempos_reg]
+            else:
+                # Fallback al cálculo antiguo (menos preciso)
+                resistencia_values = []
+                soporte_values = []
+                for i, t in enumerate(tiempos_reg):
+                    resist = info_canal['pendiente_resistencia'] * t + \
+                            (info_canal['resistencia'] - info_canal['pendiente_resistencia'] * tiempos_reg[-1])
+                    sop = info_canal['pendiente_soporte'] * t + \
+                         (info_canal['soporte'] - info_canal['pendiente_soporte'] * tiempos_reg[-1])
+                    resistencia_values.append(resist)
+                    soporte_values.append(sop)
             
             df['Resistencia'] = resistencia_values
             df['Soporte'] = soporte_values
