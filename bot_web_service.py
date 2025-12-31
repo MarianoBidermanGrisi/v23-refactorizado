@@ -29,6 +29,71 @@ import pandas as pd
 
 from flask import Flask, request, jsonify
 
+# ============================================
+# FUNCIONES DE LOGGING DETALLADO
+# ============================================
+def obtener_emoji_direccion(direccion):
+    """Retorna emoji según dirección de tendencia"""
+    return {
+        'ALCISTA': '🟢',
+        'BAJISTA': '🔴',
+        'RANGO': '🟡'
+    }.get(direccion, '⚪')
+
+def obtener_emoji_fuerza(fuerza_texto):
+    """Retorna emoji según fuerza de tendencia"""
+    if 'Muy Fuerte' in fuerza_texto:
+        return '💙'
+    elif 'Fuerte' in fuerza_texto:
+        return '💚'
+    elif 'Moderada' in fuerza_texto:
+        return '💛'
+    elif 'Débil' in fuerza_texto:
+        return '❤️‍🩹'
+    else:
+        return '⚪'
+
+def obtener_emoji_stoch(stoch_estado):
+    """Retorna emoji según estado del Stochastic"""
+    return {
+        'SOBRECOMPRA': '📈',
+        'SOBREVENTA': '📉',
+        'NEUTRO': '➖'
+    }.get(stoch_estado, '➖')
+
+def obtener_emoji_precio(posicion, direccion):
+    """Retorna emoji según posición del precio"""
+    if posicion == 'DENTRO':
+        return '📍'
+    elif posicion == 'FUERA':
+        if direccion == 'ALCISTA':
+            return '🔼 FUERA (arriba)'
+        else:
+            return '🔽 FUERA (abajo)'
+    return '📍'
+
+def log_detalle_simbolo(simbolo, timeframe, num_velas, direccion, angulo, fuerza_texto, 
+                        ancho_canal_porcentual, stoch_k, stoch_d, stoch_estado, precio_actual, 
+                        resistencia, soporte, posicion):
+    """Genera línea de logging detallada para un símbolo"""
+    emoji_direccion = obtener_emoji_direccion(direccion)
+    emoji_fuerza = obtener_emoji_fuerza(fuerza_texto)
+    emoji_stoch = obtener_emoji_stoch(stoch_estado)
+    emoji_precio = obtener_emoji_precio(posicion, direccion)
+    
+    angulo_str = f"{angulo:.1f}" if abs(angulo) >= 1 else f"{angulo:.2f}"
+    
+    return f"📊 {simbolo} - {timeframe} - {num_velas}v | {emoji_direccion} {direccion} ({angulo_str}° - {emoji_fuerza} {fuerza_texto}) | Ancho: {ancho_canal_porcentual:.1f}% - Stoch: {stoch_k:.1f}/{stoch_d:.1f} {emoji_stoch} {stoch_estado} | Precio: {emoji_precio}"
+
+def log_detalle_breakout(simbolo, tipo_breakout, precio_breakout, nivel_ruptura):
+    """Genera línea de logging detallada para un breakout"""
+    if tipo_breakout == "ALCISTA":
+        comparacion = f"> Resistencia: {nivel_ruptura:.8f}"
+    else:
+        comparacion = f"< Soporte: {nivel_ruptura:.8f}"
+    
+    return f"🚀 {simbolo} - BREAKOUT {tipo_breakout}: {precio_breakout:.8f} {comparacion}"
+
 # Configurar logging básico
 logging.basicConfig(level=logging.INFO, stream=sys.stdout, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
@@ -1455,12 +1520,22 @@ class TradingBot:
         print(f"\nESCANEANDO MERCADO: {len(symbols)} símbolos en {len(timeframes)} timeframes")
         print(f"Configuración: ángulo>={self.config.get('trend_threshold_degrees', 16)}°, fuerza>=MODERADA, Pearson>=0.4, R²>=0.4, canal>={self.config.get('min_channel_width_percent', 4)}%")
         
+        # Pre-obtener datos base para Stochastic una vez por símbolo
+        datos_base = {}
+        for sim in symbols:
+            try:
+                dm = self.obtener_datos_mercado_config(sim, '5m', 80)
+                if dm:
+                    datos_base[sim] = dm
+            except:
+                pass
+        
         for simbolo in symbols:
             if simbolo in self.senales_enviadas:
                 continue
             
             try:
-                datos_mercado = self.obtener_datos_mercado_config(simbolo, '5m', 80)
+                datos_mercado = datos_base.get(simbolo)
                 if not datos_mercado:
                     continue
                 
@@ -1480,8 +1555,11 @@ class TradingBot:
                             continue
                         
                         info_canal.update(calcular_soporte_resistencia(datos, num_velas))
-                        if not info_canal or info_canal['ancho_canal_porcentual'] < self.config.get('min_channel_width_percent', 4):
+                        if not info_canal:
                             continue
+                        
+                        ancho_canal_pct = info_canal.get('ancho_canal_porcentual', 0)
+                        min_ancho = self.config.get('min_channel_width_percent', 4)
                         
                         angulo = calcular_angulo_tendencia(datos, num_velas)
                         if angulo is None:
@@ -1506,6 +1584,30 @@ class TradingBot:
                         direccion = self.determinar_direccion_tendencia(angulo)
                         info_canal['direccion'] = direccion
                         
+                        # Determinar posición del precio
+                        resistencia = info_canal.get('resistencia_actual', info_canal.get('resistencia', precio_actual))
+                        soporte = info_canal.get('soporte_actual', info_canal.get('soporte', precio_actual))
+                        
+                        if precio_actual >= resistencia:
+                            posicion = 'FUERA'
+                        elif precio_actual <= soporte:
+                            posicion = 'FUERA'
+                        else:
+                            posicion = 'DENTRO'
+                        
+                        # LOGGING DETALLADO: mostrar todos los símbolos con canal válido
+                        if abs(angulo) >= self.config.get('trend_threshold_degrees', 16) / 2:
+                            linea_log = log_detalle_simbolo(
+                                simbolo, timeframe, num_velas, direccion, angulo,
+                                fuerza_texto, ancho_canal_pct, stoch_k, stoch_d,
+                                stoch_estado, precio_actual, resistencia, soporte, posicion
+                            )
+                            print(linea_log)
+                        
+                        # Verificar ancho mínimo del canal
+                        if ancho_canal_pct < min_ancho:
+                            continue
+                        
                         valida, razon = self.validar_senal(info_canal, stoch_k, stoch_d, angulo, pearson, r2)
                         
                         if not valida:
@@ -1521,16 +1623,60 @@ class TradingBot:
                         
                         tipo_operacion = "LONG" if angulo > 0 else "SHORT"
                         
+                        # DETECTAR BREAKOUT
                         breakout_info = detectar_breakout(info_canal, precio_actual)
                         if breakout_info:
                             breakout_info['timestamp'] = datetime.now()
-                            print(f"   🚀 {simbolo} - BREAKOUT {breakout_info['tipo']} detectado en {timeframe}")
                             
+                            # Logging detallado del breakout
+                            linea_breakout = log_detalle_breakout(
+                                simbolo, breakout_info['tipo'], 
+                                breakout_info['precio_breakout'], 
+                                breakout_info['nivel_ruptura']
+                            )
+                            print(f"   {linea_breakout}")
+                            
+                            # Verificar cooldown de breakout
                             if simbolo in self.breakout_history:
                                 tiempo_desde_ultimo = (datetime.now() - self.breakout_history[simbolo]).total_seconds() / 60
                                 if tiempo_desde_ultimo < 120:
                                     print(f"      ⏭️ Saltando {simbolo} (último breakout hace {tiempo_desde_ultimo:.1f} min)")
                                     continue
+                            
+                            # ENVIAR NOTIFICACIÓN DE BREAKOUT A TELEGRAM
+                            token = self.config.get('telegram_token')
+                            chat_ids = self.config.get('telegram_chat_ids', [])
+                            if token and chat_ids:
+                                try:
+                                    # Generar gráfico de breakout
+                                    print(f"      📊 Generando gráfico de breakout para {simbolo}...")
+                                    buf = self.generar_grafico_profesional(simbolo, info_canal, datos_mercado, 
+                                                                          None, None, None, None)
+                                    if buf:
+                                        print(f"      📤 Enviando alerta de breakout por Telegram...")
+                                        self.enviar_grafico_telegram(buf, token, chat_ids)
+                                        time.sleep(1)
+                                    
+                                    # Mensaje de texto detallado
+                                    msg_breakout = f"🚀 <b>BREAKOUT DETECTADO</b>\n\n"
+                                    msg_breakout += f"Símbolo: <b>{simbolo}</b>\n"
+                                    msg_breakout += f"Tipo: <b>{breakout_info['tipo']}</b>\n"
+                                    msg_breakout += f"Timeframe: {timeframe}\n"
+                                    msg_breakout += f"Precio Breakout: {breakout_info['precio_breakout']:.8f}\n"
+                                    msg_breakout += f"Nivel Ruptura: {breakout_info['nivel_ruptura']:.8f}\n"
+                                    msg_breakout += f"Dirección: {direccion} ({angulo:.1f}°)\n"
+                                    msg_breakout += f"Fuerza: {fuerza_texto}\n"
+                                    msg_breakout += f"Ancho Canal: {ancho_canal_pct:.1f}%\n"
+                                    msg_breakout += f"Stochastic: {stoch_k:.1f}/{stoch_d:.1f} ({stoch_estado})\n"
+                                    msg_breakout += f"Hora: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
+                                    msg_breakout += f"\n⏳ <i>Esperando reentry para confirmar señal...</i>"
+                                    
+                                    self._enviar_telegram_simple(msg_breakout, token, chat_ids)
+                                    print(f"      ✅ Alerta de breakout enviada para {simbolo}")
+                                except Exception as e:
+                                    print(f"      ⚠️ Error enviando notificación de breakout: {e}")
+                            
+                            print(f"   🎯 {simbolo} - Breakout {breakout_info['tipo']} registrado, esperando reingreso...")
                             
                             self.breakouts_detectados[simbolo] = {
                                 'tipo': breakout_info['tipo'],
@@ -1546,6 +1692,9 @@ class TradingBot:
                             periodo_reentry = 15
                             timeout_reentry = 60
                             
+                            tipo_breakout = self.breakouts_detectados[simbolo]['tipo']
+                            nivel_ruptura = self.breakouts_detectados[simbolo]['nivel_ruptura']
+                            
                             if tiempo_desde_breakout > timeout_reentry:
                                 print(f"   ⏰ {simbolo} - Timeout reentry ({tiempo_desde_breakout:.1f} min > {timeout_reentry} min)")
                                 del self.breakouts_detectados[simbolo]
@@ -1556,8 +1705,7 @@ class TradingBot:
                             if tiempo_desde_breakout >= periodo_reentry:
                                 print(f"   🔄 {simbolo} - PERIODO REENTRY ({tiempo_desde_breakout:.1f} min >= {periodo_reentry} min)")
                                 
-                                precio_retorno = self.breakouts_detectados[simbolo]['nivel_ruptura']
-                                tipo_breakout = self.breakouts_detectados[simbolo]['tipo']
+                                precio_retorno = nivel_ruptura
                                 
                                 if tipo_breakout == "ALCISTA" and precio_actual <= precio_retorno:
                                     print(f"   ✅ {simbolo} - REENTRY LONG confirmado (precio {precio_actual:.8f} <= {precio_retorno:.8f})")
