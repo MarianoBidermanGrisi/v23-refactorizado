@@ -1426,81 +1426,124 @@ class TradingBot:
             logger.error(f"Error calculando canal de regresión: {e}")
             return None
 
-    def detectar_breakout(self, simbolo, info_canal, datos):
-        """Detectar breakout en resistencia o soporte"""
-        try:
-            precio_actual = datos['precio_actual']
-            resistencia = info_canal['resistencia']
-            soporte = info_canal['soporte']
+    def detectar_breakout(self, simbolo, info_canal, datos_mercado):
+        """Detecta si el precio ha ROTO el canal"""
+        if not info_canal:
+            return None
+        
+        if info_canal['ancho_canal_porcentual'] < self.config.get('min_channel_width_percent', 4.0):
+            return None
+        
+        precio_cierre = datos_mercado['cierres'][-1]
+        resistencia = info_canal['resistencia']
+        soporte = info_canal['soporte']
+        angulo = info_canal['angulo_tendencia']
+        direccion = info_canal['direccion']
+        nivel_fuerza = info_canal['nivel_fuerza']
+        r2 = info_canal['r2_score']
+        pearson = info_canal['coeficiente_pearson']
+        
+        if abs(angulo) < self.config.get('min_trend_strength_degrees', 16):
+            return None
+        
+        if abs(pearson) < 0.4 or r2 < 0.4:
+            return None
+        
+        if simbolo in self.breakouts_detectados:
+            ultimo_breakout = self.breakouts_detectados[simbolo]
+            tiempo_desde_ultimo = (datetime.now() - ultimo_breakout['timestamp']).total_seconds() / 60
             
-            if info_canal['nivel_fuerza'] < 3:
+            if tiempo_desde_ultimo < 115:
+                logger.info(f"     ⏰ {simbolo} - Breakout detectado recientemente ({tiempo_desde_ultimo:.1f} min), omitiendo...")
                 return None
-            
-            precio_resistencia = precio_actual - resistencia
-            precio_soporte = precio_actual - soporte
-            
-            if abs(precio_resistencia) < abs(precio_soporte):
-                if info_canal['direccion'] == "🟢 ALCISTA":
-                    if precio_actual > resistencia:
-                        return "LONG"
-            else:
-                if info_canal['direccion'] == "🔴 BAJISTA":
-                    if precio_actual < soporte:
-                        return "SHORT"
-            
-            return None
-        except Exception as e:
-            logger.error(f"Error detectando breakout: {e}")
-            return None
+        
+        margen_breakout = precio_cierre
+        
+        if direccion == "🟢 ALCISTA" and nivel_fuerza >= 2:
+            if precio_cierre < soporte:
+                logger.info(f"     🚀 {simbolo} - BREAKOUT: {precio_cierre:.8f} < Soporte: {soporte:.8f}")
+                return "BREAKOUT_LONG"
+        elif direccion == "🔴 BAJISTA" and nivel_fuerza >= 2:
+            if precio_cierre > resistencia:
+                logger.info(f"     📉 {simbolo} - BREAKOUT: {precio_cierre:.8f} > Resistencia: {resistencia:.8f}")
+                return "BREAKOUT_SHORT"
+        
+        return None
 
-    def detectar_reentry(self, simbolo, info_canal, datos):
-        """Detectar reentry después de breakout"""
-        try:
-            precio_actual = datos['precio_actual']
-            resistencia = info_canal['resistencia']
-            soporte = info_canal['soporte']
+    def detectar_reentry(self, simbolo, info_canal, datos_mercado):
+        """Detecta si el precio ha REINGRESADO al canal"""
+        if simbolo not in self.esperando_reentry:
+            return None
+        
+        breakout_info = self.esperando_reentry[simbolo]
+        tipo_breakout = breakout_info['tipo']
+        timestamp_breakout = breakout_info['timestamp']
+        tiempo_desde_breakout = (datetime.now() - timestamp_breakout).total_seconds() / 60
+        
+        if tiempo_desde_breakout > 120:
+            logger.info(f"     ⏰ {simbolo} - Timeout de reentry (>120 min), cancelando espera")
+            del self.esperando_reentry[simbolo]
             
-            if simbolo not in self.esperando_reentry:
-                return None
-            
-            info_breakout = self.esperando_reentry[simbolo]
-            tipo_breakout = info_breakout['tipo']
-            
-            margen = self.config.get('entry_margin', 0.001)
-            
-            if tipo_breakout == "LONG":
-                if info_canal['stoch_k'] < 30:
-                    if precio_actual >= resistencia and precio_actual <= resistencia * (1 + margen):
-                        return "LONG"
-            else:
-                if info_canal['stoch_k'] > 70:
-                    if precio_actual <= soporte and precio_actual >= soporte * (1 - margen):
-                        return "SHORT"
+            if simbolo in self.breakouts_detectados:
+                del self.breakouts_detectados[simbolo]
             
             return None
-        except Exception as e:
-            logger.error(f"Error detectando reentry: {e}")
-            return None
+        
+        precio_actual = datos_mercado['precio_actual']
+        resistencia = info_canal['resistencia']
+        soporte = info_canal['soporte']
+        stoch_k = info_canal['stoch_k']
+        stoch_d = info_canal['stoch_d']
+        tolerancia = 0.001 * precio_actual
+        
+        if tipo_breakout == "BREAKOUT_LONG":
+            if soporte <= precio_actual <= resistencia:
+                distancia_soporte = abs(precio_actual - soporte)
+                if distancia_soporte <= tolerancia and stoch_k <= 30 and stoch_d <= 30:
+                    logger.info(f"     ✅ {simbolo} - REENTRY LONG confirmado! Entrada en soporte con Stoch oversold")
+                    if simbolo in self.breakouts_detectados:
+                        del self.breakouts_detectados[simbolo]
+                    return "LONG"
+        elif tipo_breakout == "BREAKOUT_SHORT":
+            if soporte <= precio_actual <= resistencia:
+                distancia_resistencia = abs(precio_actual - resistencia)
+                if distancia_resistencia <= tolerancia and stoch_k >= 70 and stoch_d >= 70:
+                    logger.info(f"     ✅ {simbolo} - REENTRY SHORT confirmado! Entrada en resistencia con Stoch overbought")
+                    if simbolo in self.breakouts_detectados:
+                        del self.breakouts_detectados[simbolo]
+                    return "SHORT"
+        
+        return None
 
     def calcular_niveles_entrada(self, tipo_operacion, info_canal, precio_actual):
-        """Calcular niveles de entrada, TP y SL"""
-        try:
-            sl_porcentaje = 0.02
-            tp_porcentaje = 0.04
-            
-            if tipo_operacion == "LONG":
-                precio_entrada = precio_actual
-                stop_loss = precio_actual * (1 - sl_porcentaje)
-                take_profit = precio_actual * (1 + tp_porcentaje)
-            else:
-                precio_entrada = precio_actual
-                stop_loss = precio_actual * (1 + sl_porcentaje)
-                take_profit = precio_actual * (1 - tp_porcentaje)
-            
-            return precio_entrada, take_profit, stop_loss
-        except Exception as e:
-            logger.error(f"Error calculando niveles de entrada: {e}")
+        if not info_canal:
             return None, None, None
+        
+        resistencia = info_canal['resistencia']
+        soporte = info_canal['soporte']
+        ancho_canal = resistencia - soporte
+        sl_porcentaje = 0.02
+        
+        if tipo_operacion == "LONG":
+            precio_entrada = precio_actual
+            stop_loss = precio_entrada * (1 - sl_porcentaje)
+            take_profit = precio_entrada + ancho_canal 
+        else:
+            precio_entrada = precio_actual
+            stop_loss = resistencia * (1 + sl_porcentaje)
+            take_profit = precio_entrada - ancho_canal
+        
+        riesgo = abs(precio_entrada - stop_loss)
+        beneficio = abs(take_profit - precio_entrada)
+        ratio_rr = beneficio / riesgo if riesgo > 0 else 0
+        
+        if ratio_rr < self.config.get('min_rr_ratio', 1.2):
+            if tipo_operacion == "LONG":
+                take_profit = precio_entrada + (riesgo * self.config['min_rr_ratio'])
+            else:
+                take_profit = precio_entrada - (riesgo * self.config['min_rr_ratio'])
+        
+        return precio_entrada, take_profit, stop_loss
 
     def guardar_estado(self):
         """Guardar estado del bot"""
@@ -2044,7 +2087,7 @@ class TradingBot:
         operaciones_cerradas = []
         
         for simbolo, operacion in list(self.operaciones_activas.items()):
-            config_optima = self.config_optima_por_simbolo or {'timeframe': '5m', 'num_velas': 80}
+            config_optima = self.config_optima_por_simbolo.get(simbolo)
             if not config_optima:
                 continue
             
