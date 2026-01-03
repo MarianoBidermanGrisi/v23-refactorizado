@@ -1350,20 +1350,40 @@ class TradingBot:
             return None
 
     def obtener_datos_mercado_config(self, simbolo, timeframe, num_velas):
-        """Obtener datos de mercado con configuración de velas y timeframe"""
+        """Obtiene datos con configuración específica usando API de Bitget"""
+        if self.bitget_client:
+            try:
+                candles = self.bitget_client.get_klines(simbolo, timeframe, num_velas + 14)
+                if not candles or len(candles) == 0:
+                    logger.debug(f"      No se obtuvieron velas de Bitget para {simbolo}")
+            except Exception as e:
+                logger.warning(f"      ⚠️ Error obteniendo datos de Bitget para {simbolo}: {e}")
+        
         try:
-            datos_binance = obtener_datos_binance(simbolo, timeframe, num_velas)
-            if datos_binance:
-                return datos_binance
+            url = "https://api.binance.com/api/v3/klines"
+            params = {'symbol': simbolo, 'interval': timeframe, 'limit': num_velas + 14}
+            respuesta = requests.get(url, params=params, timeout=10)
+            datos = respuesta.json()
             
-            if self.bitget_client:
-                datos_bitget = self.bitget_client.get_klines(simbolo, timeframe, num_velas)
-                if datos_bitget:
-                    return convertir_klines_bitget(datos_bitget)
+            if not isinstance(datos, list) or len(datos) == 0:
+                return None
             
-            return None
+            maximos = [float(vela[2]) for vela in datos]
+            minimos = [float(vela[3]) for vela in datos]
+            cierres = [float(vela[4]) for vela in datos]
+            tiempos = list(range(len(datos)))
+            
+            return {
+                'maximos': maximos,
+                'minimos': minimos,
+                'cierres': cierres,
+                'tiempos': tiempos,
+                'precio_actual': cierres[-1] if cierres else 0,
+                'timeframe': timeframe,
+                'num_velas': num_velas
+            }
         except Exception as e:
-            logger.error(f"Error obteniendo datos de mercado para {simbolo}: {e}")
+            logger.error(f"      ❌ Error obteniendo datos de Binance para {simbolo}: {e}")
             return None
 
     def calcular_canal_regresion_config(self, datos_mercado, num_velas=None):
