@@ -19,6 +19,7 @@ import itertools
 import statistics
 import random
 import warnings
+import logging
 
 # Importar configuración de mínimos de Bitget
 try:
@@ -26,8 +27,9 @@ try:
     BITGET_CONFIG_AVAILABLE = True
 except ImportError:
     BITGET_CONFIG_AVAILABLE = False
-    logger = logging.getLogger(__name__)
-    logger.warning("⚠️ config/bitget_config.py no disponible, usando valores por defecto")
+    # Logging ya está importado arriba, usar directamente
+    import sys
+    print("⚠️ config/bitget_config.py no disponible, usando valores por defecto", file=sys.stderr)
 import matplotlib
 matplotlib.use('Agg')  # Backend sin GUI
 import matplotlib.pyplot as plt
@@ -36,7 +38,6 @@ import pandas as pd
 from io import BytesIO
 from flask import Flask, request, jsonify
 import threading
-import logging
 
 # Configuración mejorada de matplotlib para evitar warnings de emojis
 def configurar_matplotlib():
@@ -80,11 +81,6 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-tpsl_manager = create_tpsl_manager(
-    api_key=os.environ.get('BITGET_API_KEY', ''),
-    secret_key=os.environ.get('BITGET_SECRET_KEY', ''),
-    passphrase=os.environ.get('BITGET_API_PASSPHRASE', '')
-)
 # ---------------------------
 # [INICIO DEL CÓDIGO DEL BOT NUEVO]
 # ---------------------------
