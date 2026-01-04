@@ -18,7 +18,7 @@ import itertools
 import statistics
 import random
 import warnings
-from tp_sl_manager import BitgetTPSLManager, create_tpsl_manager
+
 
 # Importar configuración de mínimos de Bitget
 try:
