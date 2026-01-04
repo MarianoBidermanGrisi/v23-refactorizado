@@ -3748,7 +3748,7 @@ def ejecutar_bot_directamente():
     print("="*70)
     
     bot.iniciar()
-
+    
 if __name__ == '__main__':
     # Para ejecución local, inicia el bot directamente
     # o comenta la siguiente línea y descomenta app.run() para usar Flask
@@ -3759,22 +3759,22 @@ if __name__ == '__main__':
 # FLASK APP Y RENDER
 # ---------------------------
 
-app = Flask(__name__)
+    app = Flask(__name__)
 
 # Crear bot con configuración desde entorno
-config = crear_config_desde_entorno()
-bot = TradingBot(config)
+    config = crear_config_desde_entorno()
+    bot = TradingBot(config)
 
-def run_bot_loop():
-    """Ejecuta el bot en un hilo separado"""
-    logger.info("🤖 Iniciando hilo del bot...")
-    while True:
-        try:
-            bot.ejecutar_analisis()
-            time.sleep(bot.config.get('scan_interval_minutes', 1) * 60)
-        except Exception as e:
-            logger.error(f"❌ Error en el hilo del bot: {e}", exc_info=True)
-            time.sleep(60)
+    def run_bot_loop():
+        """Ejecuta el bot en un hilo separado"""
+        logger.info("🤖 Iniciando hilo del bot...")
+        while True:
+            try:
+                bot.ejecutar_analisis()
+                time.sleep(bot.config.get('scan_interval_minutes', 1) * 60)
+            except Exception as e:
+                logger.error(f"❌ Error en el hilo del bot: {e}", exc_info=True)
+                time.sleep(60)
 
 # Iniciar hilo del bot
 bot_thread = threading.Thread(target=run_bot_loop, daemon=True)
