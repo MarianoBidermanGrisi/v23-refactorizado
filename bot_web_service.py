@@ -3652,7 +3652,7 @@ def crear_config_completa():
         'min_trend_strength_degrees': 16.0,
         'entry_margin': 0.001,
         'min_rr_ratio': 1.2,
-        'scan_interval_minutes': 5,  # Escaneo cada 2 minutos
+        'scan_interval_minutes': 2,  # Escaneo cada 2 minutos
         'timeframes': ['5m', '15m', '30m', '1h', '4h'],
         'velas_options': [80, 100, 120, 150, 200],
         'symbols': [
@@ -3748,9 +3748,11 @@ def ejecutar_bot_directamente():
     print("="*70)
     
     bot.iniciar()
-    
+
 if __name__ == '__main__':
     # Para ejecución local, inicia el bot directamente
     # o comenta la siguiente línea y descomenta app.run() para usar Flask
-    # ejecutar_bot_directamente()
+    #ejecutar_bot_directamente()
     
+    # Si prefieres usar Flask (ejecuta en http://localhost:5000)
+    app.run(debug=True, host='0.0.0.0', port=5000)
