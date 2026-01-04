@@ -1558,45 +1558,102 @@ class TradingBot:
             logger.error(f"Error calculando niveles de entrada: {e}")
             return None, None, None
 
+    def _determinar_posicion_precio(self, precio_actual, resistencia, soporte):
+        """Determina la posición del precio respecto al canal"""
+        umbral = 0.001  # 0.1%
+        if precio_actual > resistencia * (1 + umbral):
+            return "🔼 FUERA (arriba)"
+        elif precio_actual < soporte * (1 - umbral):
+            return "🔽 FUERA (abajo)"
+        else:
+            return "📍 DENTRO"
+
+    def _get_stoch_emoji(self, stoch_k, stoch_d):
+        """Retorna emoji según el estado del Stochastic"""
+        if stoch_k <= 20 or stoch_d <= 20:
+            return "📉 OVERSOLD"
+        elif stoch_k >= 80 or stoch_d >= 80:
+            return "📈 OVERBOUGHT"
+        else:
+            return "➖ NEUTRO"
+
+    def _get_direccion_emoji(self, direccion):
+        """Retorna emoji según la dirección de la tendencia"""
+        if direccion == "ALCISTA":
+            return "🟢 ALCISTA"
+        elif direccion == "BAJISTA":
+            return "🔴 BAJISTA"
+        else:
+            return "⚪ RANGO"
+
+    def _log_simbolo_analizado(self, simbolo, info_canal, datos_mercado, config_optima):
+        """Imprime información detallada del símbolo analizado (solo logging, no afecta la lógica)"""
+        try:
+            direccion_emoji = self._get_direccion_emoji(info_canal.get('direccion', 'RANGO'))
+            angulo = info_canal.get('angulo_tendencia', 0)
+            fuerza = info_canal.get('fuerza_texto', 'N/A')
+            ancho = info_canal.get('ancho_canal_porcentual', 0)
+            stoch_k = info_canal.get('stoch_k', 0)
+            stoch_d = info_canal.get('stoch_d', 0)
+            stoch_emoji = self._get_stoch_emoji(stoch_k, stoch_d)
+            precio_actual = datos_mercado.get('precio_actual', 0)
+            resistencia = info_canal.get('resistencia', 0)
+            soporte = info_canal.get('soporte', 0)
+            posicion = self._determinar_posicion_precio(precio_actual, resistencia, soporte)
+
+            # Solo imprimir si el canal cumple los criterios mínimos
+            min_ancho = self.config.get('min_channel_width_percent', 4)
+            if ancho >= min_ancho and abs(info_canal.get('coeficiente_pearson', 0)) >= 0.4:
+                logger.info(f"📊 {simbolo} - {config_optima['timeframe']} - {config_optima['num_velas']}v | "
+                           f"{direccion_emoji} ({angulo:.1f}° - {fuerza}) | "
+                           f"Ancho: {ancho:.1f}% - Stoch: {stoch_k:.1f}/{stoch_d:.1f} {stoch_emoji} | Precio: {posicion}")
+        except Exception as e:
+            pass  # Silencioso en caso de error en logging
+
     def escanear_mercado(self):
         """Escanear mercado en busca de señales"""
+        logger.info(f"Escaneando {len(self.symbols)} simbolos (Estrategia: Breakout + Reentry)...")
+
         senales_encontradas = 0
-        
+
         for simbolo in self.symbols:
             try:
                 mejor_config = None
                 datos_mercado = None
                 info_canal = None
-                
+
                 for tf in self.timeframes:
                     for num_velas in self.velas_options:
                         datos = self.obtener_datos_mercado_config(simbolo, tf, num_velas)
                         if not datos:
                             continue
-                        
+
                         canal = self.calcular_canal_regresion_config(datos, num_velas)
                         if not canal:
                             continue
-                        
+
                         ancho_pct = canal['ancho_canal_porcentual']
                         min_ancho = self.config.get('min_channel_width_percent', 4)
-                        
-                        if (ancho_pct >= min_ancho and 
-                            canal['nivel_fuerza'] >= 2 and 
-                            abs(canal['coeficiente_pearson']) >= 0.4 and 
+
+                        if (ancho_pct >= min_ancho and
+                            canal['nivel_fuerza'] >= 2 and
+                            abs(canal['coeficiente_pearson']) >= 0.4 and
                             canal['r2_score'] >= 0.4):
-                            
-                            if (mejor_config is None or 
+
+                            if (mejor_config is None or
                                 (tf in ['5m', '15m'] and canal['nivel_fuerza'] > self.config_optima_por_simbolo.get(simbolo, {}).get('fuerza', 0))):
                                 mejor_config = {'timeframe': tf, 'num_velas': num_velas, 'fuerza': canal['nivel_fuerza']}
                                 datos_mercado = datos
                                 info_canal = canal
-                
+
                 if not datos_mercado:
                     continue
-                
+
                 config_optima = self.config_optima_por_simbolo.get(simbolo, mejor_config)
-                
+
+                # Log informativo del símbolo analizado
+                self._log_simbolo_analizado(simbolo, info_canal, datos_mercado, config_optima)
+
                 if simbolo not in self.esperando_reentry:
                     tipo_breakout = self.detectar_breakout(simbolo, info_canal, datos_mercado)
                     if tipo_breakout:
@@ -1611,46 +1668,47 @@ class TradingBot:
                             'timestamp': datetime.now(),
                             'precio_breakout': datos_mercado['precio_actual']
                         }
-                        logger.info(f"Breakout detectado en {simbolo}, esperando reentry...")
+                        logger.info(f"  🚀 {simbolo} - BREAKOUT {tipo_breakout}: Precio actual {datos_mercado['precio_actual']:.8f}")
+                        logger.info(f"  🎯 {simbolo} - Breakout registrado, esperando reingreso...")
                         continue
-                
+
                 tipo_operacion = self.detectar_reentry(simbolo, info_canal, datos_mercado)
                 if not tipo_operacion:
                     continue
-                
+
                 precio_entrada, tp, sl = self.calcular_niveles_entrada(tipo_operacion, info_canal, datos_mercado['precio_actual'])
-                
+
                 if not precio_entrada or not tp or not sl:
                     continue
-                
+
                 if simbolo in self.breakout_history:
                     ultimo_breakout = self.breakout_history[simbolo]
                     tiempo_desde_ultimo = (datetime.now() - ultimo_breakout).total_seconds() / 3600
                     if tiempo_desde_ultimo < 2:
                         continue
-                
+
                 breakout_info = self.esperando_reentry[simbolo]
                 self.generar_senal_operacion(
-                    simbolo, tipo_operacion, precio_entrada, tp, sl, 
+                    simbolo, tipo_operacion, precio_entrada, tp, sl,
                     info_canal, datos_mercado, config_optima, breakout_info
                 )
-                
+
                 senales_encontradas += 1
                 self.breakout_history[simbolo] = datetime.now()
                 del self.esperando_reentry[simbolo]
-                
+
             except Exception as e:
                 logger.error(f"Error analizando {simbolo}: {e}")
                 continue
-        
+
         if self.esperando_reentry:
             logger.info(f"Esperando reentry en {len(self.esperando_reentry)} simbolos:")
-        
+
         if senales_encontradas > 0:
             logger.info(f"Se encontraron {senales_encontradas} senales de trading")
         else:
             logger.info("No se encontraron senales en este ciclo")
-        
+
         return senales_encontradas
 
     def generar_senal_operacion(self, simbolo, tipo_operacion, precio_entrada, tp, sl,
