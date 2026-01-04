@@ -29,9 +29,26 @@ import logging
 logging.basicConfig(level=logging.INFO, stream=sys.stdout, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-# Configurar fuentes compatibles con Unicode para matplotlib
-plt.rcParams['font.sans-serif'] = ['Noto Sans CJK SC', 'WenQuanYi Zen Hei', 'Arial Unicode MS', 'DejaVu Sans']
-plt.rcParams['axes.unicode_minus'] = False
+# Configurar fuentes compatibles con Unicode y emojis para matplotlib
+# CORRECCIÓN: Agregar fuentes que soportan emojis para evitar warnings de glyps faltantes
+try:
+    # Lista de fuentes con soporte para emojis, ordenadas por preferencia
+    fuentes_emoji = [
+        'Noto Color Emoji',      # Google Noto Color Emoji (mejor soporte)
+        'Apple Color Emoji',     # Emoji de Apple (macOS/iOS)
+        'Segoe UI Emoji',        # Emoji de Windows
+        'Twemoji Mozilla',       # Twemoji de Mozilla
+        'Noto Sans CJK SC',      # Chino simplificado
+        'WenQuanYi Zen Hei',     # Chino tradicional
+        'Arial Unicode MS',      # Unicode genérico de Microsoft
+        'DejaVu Sans',           # Fallback por defecto
+    ]
+    plt.rcParams['font.sans-serif'] = fuentes_emoji
+    plt.rcParams['axes.unicode_minus'] = False
+    # Intentar usar fuentes emoji sin forzar la familia
+    plt.rcParams['font.family'] = 'sans-serif'
+except Exception as e:
+    logger.warning(f"⚠️ Error configurando fuentes: {e}")
 
 # ---------------------------
 # [INICIO DEL CÓDIGO DEL BOT NUEVO]
@@ -351,57 +368,219 @@ class BitgetClient:
             logger.error(f"Error obteniendo leverage máximo para {symbol}: {e}")
             return 20  # Fallback seguro
 
-    def place_tpsl_order(self, symbol, hold_side, trigger_price, order_type='stop_loss', stop_loss_price=None, take_profit_price=None, trade_direction=None):
+    def get_mark_price(self, symbol):
         """
-        Coloca orden de Stop Loss o Take Profit en Bitget Futuros
+        Obtiene el precio de marca (mark price) actual para un símbolo.
+        
+        Args:
+            symbol: Símbolo de trading (ej: 'BTCUSDT')
+        
+        Returns:
+            str: Mark price como string, o None si hay error
+        """
+        try:
+            request_path = '/api/v2/mix/market/tickers'
+            params = {'symbol': symbol}
+            
+            query_string = f"?symbol={symbol}"
+            full_request_path = request_path + query_string
+            
+            headers = self._get_headers('GET', full_request_path, '')
+            
+            response = requests.get(
+                self.base_url + request_path,
+                headers=headers,
+                params=params,
+                timeout=10
+            )
+            
+            if response.status_code == 200:
+                data = response.json()
+                if data.get('code') == '00000':
+                    tickers = data.get('data', [])
+                    if tickers:
+                        mark_price = tickers[0].get('markPrice')
+                        if mark_price:
+                            logger.info(f"📊 {symbol}: Mark Price = {mark_price}")
+                            return mark_price
+            
+            return None
+        except Exception as e:
+            logger.error(f"Error obteniendo mark price para {symbol}: {e}")
+            return None
+
+    def obtener_tick_size(self, symbol):
+        """
+        Calcula el tamaño del tick (mínimo movimiento de precio) para un símbolo.
+        
+        Para la mayoría de símbolos, el tick es 1 / (10^priceScale)
+        Pero para símbolos con precios muy pequeños, el tick puede ser diferente.
+        
+        Args:
+            symbol: Símbolo de trading
+        
+        Returns:
+            float: Tamaño del tick
+        """
+        try:
+            symbol_info = self.get_symbol_info(symbol)
+            if symbol_info:
+                price_scale = int(symbol_info.get('priceScale', 4))
+                # El tick es 1 en la escala de precio
+                tick = 1 / (10 ** price_scale)
+                
+                # Para precios muy pequeños, ajustar el tick
+                tick = float(tick)
+                if tick < 0.00000001:
+                    tick = 0.00000001
+                elif tick < 0.000001:
+                    tick = 0.000001
+                elif tick < 0.00001:
+                    tick = 0.00001
+                elif tick < 0.0001:
+                    tick = 0.0001
+                elif tick < 0.001:
+                    tick = 0.001
+                elif tick < 0.01:
+                    tick = 0.01
+                
+                logger.info(f"📊 {symbol}: Tick size = {tick} (priceScale={price_scale})")
+                return tick
+            
+            # Fallback para símbolos desconocidos
+            return 0.0001  # Tick por defecto para la mayoría de símbolos
+            
+        except Exception as e:
+            logger.error(f"Error calculando tick size para {symbol}: {e}")
+            return 0.0001  # Fallback seguro
+
+    def place_tpsl_order(self, symbol, hold_side, trigger_price=None, order_type='stop_loss', stop_loss_price=None, take_profit_price=None, trade_direction=None):
+        """
+        Coloca orden de Stop Loss o Take Profit en Bitget Futuros usando el endpoint place-pos-tpsl.
+        
+        CORRECCIÓN COMPLETA: Según documentación oficial de Bitget API v2.
+        Endpoint: POST /api/v2/mix/order/place-pos-tpsl
         
         Args:
             symbol: Símbolo (ej: 'CRVUSDT')
-            hold_side: 'long' o 'short'
-            trigger_price: Precio de activación
+            hold_side: 'long' o 'short' (para two-way) o 'buy'/'sell' (para one-way)
+            trigger_price: PRECIO DE ACTIVACIÓN (trigger)
             order_type: 'stop_loss' o 'take_profit'
-            stop_loss_price: Precio de stop loss (opcional)
-            take_profit_price: Precio de take profit (opcional)
-            trade_direction: 'LONG' o 'SHORT' para redondeo correcto del SL
+            stop_loss_price: Precio de stop loss (para SL)
+            take_profit_price: Precio de take profit (para TP)
+            trade_direction: 'LONG' o 'SHORT' para redondeo correcto
         """
         request_path = '/api/v2/mix/order/place-pos-tpsl'
         
-        # Determinar la dirección de la operación si no se proporciona
+        # Determinar la dirección de la operación
         if trade_direction is None:
             trade_direction = 'LONG' if hold_side == 'long' else 'SHORT'
         
-        # CORRECCIÓN: Usar precisión dinámica basada en el precio, no en priceScale
-        # Para precios muy pequeños (como SHIBUSDT, PEPE, ENSUSDT, XLMUSDT, etc.)
-        precision_adaptada = self.obtener_precision_adaptada(trigger_price, symbol)
-        trigger_price_formatted = self.redondear_precio_manual(trigger_price, precision_adaptada)
+        # Obtener precio de marca para calcular trigger
+        mark_price = self.get_mark_price(symbol)
+        tick_size = self.obtener_tick_size(symbol)
         
+        # Construir body con PARÁMETROS CORRECTOS según API Bitget v2
         body = {
             'symbol': symbol,
             'productType': 'USDT-FUTURES',
             'marginCoin': 'USDT',
             'holdSide': hold_side,
-            'orderType': 'market',
-            'triggerType': 'mark_price',
-            'triggerPrice': trigger_price_formatted,
-            # delegateType es OBLIGATORIO para Bitget API v2 (0 = límite, 1 = mercado)
-            'delegateType': '1',
-            # CORRECCIÓN ERROR 40034: Estos parámetros son OBLIGATORIOS
-            'stopLossTriggerType': 'mark_price',
-            'stopSurplusTriggerType': 'mark_price'
         }
         
-        # CORRECCIÓN: Usar nombres correctos de parámetros según API Bitget v2
+        # Si es stop_loss, configurar parámetros de SL
         if order_type == 'stop_loss' and stop_loss_price:
-            precision_sl = self.obtener_precision_adaptada(stop_loss_price, symbol)
-            # Pasar la dirección para redondeo correcto del SL
-            stop_loss_formatted = self.redondear_precio_manual(stop_loss_price, precision_sl, symbol, trade_direction)
-            body['stopLossTriggerPrice'] = stop_loss_formatted
-            logger.info(f"🔧 SL para {symbol}: precio={stop_loss_price}, precision={precision_sl}, formatted={stop_loss_formatted}, direccion={trade_direction}")
+            # Calcular precio de trigger (un tick desde el precio actual)
+            if mark_price:
+                current_price = float(mark_price)
+            else:
+                current_price = float(stop_loss_price)
+            
+            if trade_direction == 'LONG':
+                # Para LONG, SL se activa cuando precio baja
+                trigger_calc = current_price - tick_size
+            else:
+                # Para SHORT, SL se activa cuando precio sube
+                trigger_calc = current_price + tick_size
+            
+            # Redondear según precisión del símbolo
+            symbol_info = self.get_symbol_info(symbol)
+            if symbol_info:
+                price_scale = int(symbol_info.get('priceScale', 4))
+                trigger_price_formatted = round(trigger_calc, price_scale)
+            else:
+                trigger_price_formatted = self.redondear_precio_manual(trigger_calc, 8)
+            
+            # Redondear precio del SL
+            sl_formatted = self.redondear_precio_manual(stop_loss_price, 8, symbol, trade_direction)
+            
+            # AGREGAR PARÁMETROS CORRECTOS PARA SL
+            body['stopLossTriggerPrice'] = str(sl_formatted)
+            body['stopLossTriggerType'] = 'mark_price'
+            # Execution price: 0 = market price execution
+            body['stopLossExecutePrice'] = '0'
+            
+            logger.info(f"🔧 SL para {symbol}: trigger={trigger_price_formatted}, sl_price={sl_formatted}, direccion={trade_direction}")
+        
+        # Si es take_profit, configurar parámetros de TP
         elif order_type == 'take_profit' and take_profit_price:
-            precision_tp = self.obtener_precision_adaptada(take_profit_price, symbol)
-            take_profit_formatted = self.redondear_precio_manual(take_profit_price, precision_tp, symbol)
-            body['stopSurplusTriggerPrice'] = take_profit_formatted
-            logger.info(f"🔧 TP para {symbol}: precio={take_profit_price}, precision={precision_tp}, formatted={take_profit_formatted}")
+            # Calcular precio de trigger
+            if mark_price:
+                current_price = float(mark_price)
+            else:
+                current_price = float(take_profit_price)
+            
+            if trade_direction == 'LONG':
+                # Para LONG, TP se activa cuando precio sube
+                trigger_calc = current_price + tick_size
+            else:
+                # Para SHORT, TP se activa cuando precio baja
+                trigger_calc = current_price - tick_size
+            
+            # Redondear según precisión del símbolo
+            symbol_info = self.get_symbol_info(symbol)
+            if symbol_info:
+                price_scale = int(symbol_info.get('priceScale', 4))
+                trigger_price_formatted = round(trigger_calc, price_scale)
+            else:
+                trigger_price_formatted = self.redondear_precio_manual(trigger_calc, 8)
+            
+            # Redondear precio del TP
+            tp_formatted = self.redondear_precio_manual(take_profit_price, 8, symbol)
+            
+            # AGREGAR PARÁMETROS CORRECTOS PARA TP
+            body['stopSurplusTriggerPrice'] = str(tp_formatted)
+            body['stopSurplusTriggerType'] = 'mark_price'
+            # Execution price: 0 = market price execution
+            body['stopSurplusExecutePrice'] = '0'
+            
+            logger.info(f"🔧 TP para {symbol}: trigger={trigger_price_formatted}, tp_price={tp_formatted}, direccion={trade_direction}")
+        
+        # Enviar solicitud
+        body_json = json.dumps(body, separators=(',', ':'), ensure_ascii=False)
+        headers = self._get_headers('POST', request_path, body_json)
+        
+        logger.info(f"📤 Enviando orden {order_type} para {symbol}: {body}")
+        
+        response = requests.post(
+            self.base_url + request_path,
+            headers=headers,
+            data=body_json,
+            timeout=10
+        )
+        
+        logger.info(f"📤 Respuesta TP/SL BITGET: {response.status_code} - {response.text}")
+        
+        if response.status_code == 200:
+            data = response.json()
+            if data.get('code') == '00000':
+                logger.info(f"✅ {order_type.upper()} creado correctamente para {symbol}")
+                return data.get('data')
+            else:
+                logger.error(f"❌ Error en {order_type}: {data.get('msg')} (código: {data.get('code')})")
+        
+        logger.error(f"❌ Error creando {order_type}: {response.text}")
+        return None
         
         body_json = json.dumps(body, separators=(',', ':'), ensure_ascii=False)
         headers = self._get_headers('POST', request_path, body_json)
@@ -2082,15 +2261,17 @@ class TradingBot:
 
     def verificar_y_recolocar_tp_sl(self):
         """
-        Verificar estado de TP/SL integrados en las posiciones.
-        NOTA: TP/SL están integrados directamente en la orden de entrada, NO son órdenes separadas.
-        Esta función solo verifica que la posición existe y tiene los niveles correctos.
+        Verificar estado de TP/SL en las posiciones.
+        
+        CORRECCIÓN: Ahora usa takeProfitId y stopLossId para determinar si las órdenes existen.
+        Los campos takeProfit y stopLoss (preset) pueden estar vacíos incluso cuando las órdenes existen.
+        La presencia de takeProfitId/stopLossId indica que las órdenes están activas.
         """
         if not self.bitget_client:
             return
 
         try:
-            logger.info("🔍 Verificando estado de posiciones con TP/SL integrados...")
+            logger.info("🔍 Verificando estado de TP/SL en posiciones...")
 
             for simbolo, operacion in self.operaciones_bitget_activas.items():
                 try:
@@ -2106,20 +2287,43 @@ class TradingBot:
                     for pos in posiciones:
                         if pos.get('symbol') == simbolo:
                             posicion_encontrada = True
-                            # Verificar que la posición tiene TP/SL integrados
-                            tp_configurado = pos.get('takeProfit', '')
-                            sl_configurado = pos.get('stopLoss', '')
-
-                            if tp_configurado and sl_configurado:
-                                logger.info(f"✅ {simbolo}: TP/SL integrados correctamente")
-                                logger.info(f"   - SL (preset): {sl_configurado}")
-                                logger.info(f"   - TP (preset): {tp_configurado}")
-                            elif tp_configurado:
-                                logger.warning(f"⚠️ {simbolo}: Solo TP configurado")
-                            elif sl_configurado:
-                                logger.warning(f"⚠️ {simbolo}: Solo SL configurado")
+                            
+                            # CORRECCIÓN: Verificar por IDs de órdenes, no solo por campos preset
+                            # Los campos takeProfit/stopLoss pueden estar vacíos, pero si hay IDs, las órdenes existen
+                            tp_id = pos.get('takeProfitId', '')
+                            sl_id = pos.get('stopLossId', '')
+                            tp_preset = pos.get('takeProfit', '')
+                            sl_preset = pos.get('stopLoss', '')
+                            
+                            tiene_tp = bool(tp_id and tp_id != '')
+                            tiene_sl = bool(sl_id and sl_id != '')
+                            
+                            if tiene_tp and tiene_sl:
+                                logger.info(f"✅ {simbolo}: TP/SL activos correctamente (IDs: TP={tp_id[:8]}..., SL={sl_id[:8]}...)")
+                                if tp_preset:
+                                    logger.info(f"   - TP (preset): {tp_preset}")
+                                if sl_preset:
+                                    logger.info(f"   - SL (preset): {sl_preset}")
+                            elif tiene_tp:
+                                logger.info(f"✅ {simbolo}: TP activo (ID: {tp_id[:8]}...)")
+                                if not tp_preset:
+                                    logger.info(f"   ℹ️ TP no visible como preset (orden independiente)")
+                                else:
+                                    logger.info(f"   - TP (preset): {tp_preset}")
+                                logger.warning(f"⚠️ {simbolo}: SL no detectado")
+                            elif tiene_sl:
+                                logger.info(f"✅ {simbolo}: SL activo (ID: {sl_id[:8]}...)")
+                                if not sl_preset:
+                                    logger.info(f"   ℹ️ SL no visible como preset (orden independiente)")
+                                else:
+                                    logger.info(f"   - SL (preset): {sl_preset}")
+                                logger.warning(f"⚠️ {simbolo}: TP no detectado")
                             else:
-                                logger.warning(f"⚠️ {simbolo}: TP/SL no visibles (pueden estar en proceso)")
+                                # No hay órdenes TP/SL - solo advertir si es necesario
+                                logger.warning(f"⚠️ {simbolo}: Sin órdenes TP/SL detectadas")
+                                logger.info(f"   ℹ️ La posición puede haber sido abierta manualmente")
+                                logger.info(f"   ℹ️ O las órdenes pueden estar en proceso de colocación")
+                            
                             break
 
                     if not posicion_encontrada:
@@ -2129,7 +2333,7 @@ class TradingBot:
                     logger.error(f"❌ Error verificando posición para {simbolo}: {e}")
                     continue
 
-            logger.info("✅ Verificación de TP/SL integrada completada")
+            logger.info("✅ Verificación de TP/SL completada")
 
         except Exception as e:
             logger.error(f"❌ Error en verificación de TP/SL: {e}")
