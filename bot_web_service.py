@@ -380,7 +380,7 @@ class BitgetClient:
             'triggerType': 'mark_price',
             'triggerPrice': trigger_price_formatted,
             # delegateType es OBLIGATORIO para Bitget API v2 (0 = límite, 1 = mercado)
-            'delegateType': '1',
+            'delegateType': 1,
             # CORRECCIÓN ERROR 40034: Estos parámetros son OBLIGATORIOS
             'stopLossTriggerType': 'mark_price',
             'stopSurplusTriggerType': 'mark_price'
