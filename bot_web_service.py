@@ -30,33 +30,6 @@ logging.basicConfig(level=logging.INFO, stream=sys.stdout, format='%(asctime)s -
 logger = logging.getLogger(__name__)
 
 # ---------------------------
-# CONFIGURACIÓN DE FUENTES PARA EMOJIS
-# ---------------------------
-import matplotlib.font_manager as fm
-
-# Intentar encontrar fuentes que soporten emojis (Noto Sans Emoji, Segoe UI Emoji, etc.)
-font_paths = [
-    '/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc',  # Noto Sans CJK
-    '/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf',     # Noto Sans
-    '/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc',  # Noto Sans CJK (opentype)
-]
-
-available_font = None
-for font_path in font_paths:
-    if os.path.exists(font_path):
-        try:
-            fm.fontManager.addfont(font_path)
-            available_font = fm.FontProperties(fname=font_path)
-            logger.info(f" Fuente cargada para emojis: {font_path}")
-            break
-        except Exception as e:
-            logger.warning(f" No se pudo cargar fuente {font_path}: {e}")
-
-# Configurar fuentes por defecto para matplotlib
-plt.rcParams['font.family'] = ['DejaVu Sans', 'Noto Sans', 'sans-serif']
-plt.rcParams['axes.unicode_minus'] = False
-
-# ---------------------------
 # [INICIO DEL CÓDIGO DEL BOT NUEVO]
 # Copiado íntegro y corregido para ejecución local
 # ---------------------------
@@ -387,14 +360,14 @@ class BitgetClient:
             take_profit_price: Precio de take profit (opcional)
             trade_direction: 'LONG' o 'SHORT' para redondeo correcto del SL
         """
-        # Endpoint correcto para TP/SL en posiciones existentes
         request_path = '/api/v2/mix/order/place-pos-tpsl'
         
         # Determinar la dirección de la operación si no se proporciona
         if trade_direction is None:
             trade_direction = 'LONG' if hold_side == 'long' else 'SHORT'
         
-        # CORRECCIÓN: Usar precisión dinámica basada en el precio
+        # CORRECCIÓN: Usar precisión dinámica basada en el precio, no en priceScale
+        # Para precios muy pequeños (como SHIBUSDT, PEPE, ENSUSDT, XLMUSDT, etc.)
         precision_adaptada = self.obtener_precision_adaptada(trigger_price, symbol)
         trigger_price_formatted = self.redondear_precio_manual(trigger_price, precision_adaptada)
         
@@ -419,17 +392,17 @@ class BitgetClient:
             # Pasar la dirección para redondeo correcto del SL
             stop_loss_formatted = self.redondear_precio_manual(stop_loss_price, precision_sl, symbol, trade_direction)
             body['stopLossTriggerPrice'] = stop_loss_formatted
-            logger.info(f"[SL] {symbol}: precio={stop_loss_price}, precision={precision_sl}, formatted={stop_loss_formatted}, direccion={trade_direction}")
+            logger.info(f"🔧 SL para {symbol}: precio={stop_loss_price}, precision={precision_sl}, formatted={stop_loss_formatted}, direccion={trade_direction}")
         elif order_type == 'take_profit' and take_profit_price:
             precision_tp = self.obtener_precision_adaptada(take_profit_price, symbol)
             take_profit_formatted = self.redondear_precio_manual(take_profit_price, precision_tp, symbol)
             body['stopSurplusTriggerPrice'] = take_profit_formatted
-            logger.info(f"[TP] {symbol}: precio={take_profit_price}, precision={precision_tp}, formatted={take_profit_formatted}")
+            logger.info(f"🔧 TP para {symbol}: precio={take_profit_price}, precision={precision_tp}, formatted={take_profit_formatted}")
         
         body_json = json.dumps(body, separators=(',', ':'), ensure_ascii=False)
         headers = self._get_headers('POST', request_path, body_json)
         
-        logger.info(f"[ENVIO] Orden {order_type} para {symbol}: {body}")
+        logger.info(f"📤 Enviando orden {order_type} para {symbol}: {body}")
         
         response = requests.post(
             self.base_url + request_path,
@@ -438,28 +411,24 @@ class BitgetClient:
             timeout=10
         )
         
-        logger.info(f"[RESPUESTA] TP/SL BITGET: {response.status_code} - {response.text}")
+        logger.info(f"📤 Respuesta TP/SL BITGET: {response.status_code} - {response.text}")
         
         if response.status_code == 200:
             data = response.json()
             if data.get('code') == '00000':
-                logger.info(f"[OK] {order_type.upper()} creado correctamente para {symbol}")
+                logger.info(f"✅ {order_type.upper()} creado correctamente para {symbol}")
                 return data.get('data')
             else:
                 # Error 40017: parámetros incorrectos
                 if data.get('code') == '40017':
-                    logger.error(f"[ERROR] Error 40017 en {order_type}: {data.get('msg')}")
-                    logger.error(f"[DEBUG] Body enviado: {body}")
+                    logger.error(f"❌ Error 40017 en {order_type}: {data.get('msg')}")
+                    logger.error(f"💡 Body enviado: {body}")
                 # Error 40034: faltan parámetros de tipo
                 if data.get('code') == '40034':
-                    logger.error(f"[ERROR] Error 40034 en {order_type}: {data.get('msg')}")
-                    logger.error(f"[DEBUG] Body enviado: {body}")
-                # Error 43011: delegateType error
-                if data.get('code') == '43011':
-                    logger.error(f"[ERROR] Error 43011 en {order_type}: {data.get('msg')}")
-                    logger.error(f"[DEBUG] Body enviado: {body}")
+                    logger.error(f"❌ Error 40034 en {order_type}: {data.get('msg')}")
+                    logger.error(f"💡 Body enviado: {body}")
         
-        logger.error(f"[ERROR] Error creando {order_type}: {response.text}")
+        logger.error(f"❌ Error creando {order_type}: {response.text}")
         return None
 
     def place_plan_order(self, symbol, hold_side, trigger_price, plan_type):
@@ -2669,10 +2638,10 @@ class TradingBot:
             breakout_line = [precio_breakout] * len(df)
             if tipo_breakout == "BREAKOUT_LONG":
                 color_breakout = "#D68F01"
-                titulo_extra = "[LONG] RUPTURA"
+                titulo_extra = "🚀 RUPTURA ALCISTA"
             else:
                 color_breakout = '#D68F01'
-                titulo_extra = "[SHORT] RUPTURA"
+                titulo_extra = "📉 RUPTURA BAJISTA"
             apds.append(mpf.make_addplot(breakout_line, color=color_breakout, linestyle='-', width=3, panel=0, alpha=0.8))
             # Stochastic
             apds.append(mpf.make_addplot(df['Stoch_K'], color='#00BFFF', width=1.5, panel=1, ylabel='Stochastic'))
@@ -2683,7 +2652,7 @@ class TradingBot:
             apds.append(mpf.make_addplot(oversold, color="#E9E4E4", linestyle='--', width=0.8, panel=1, alpha=0.5))
             # Crear gráfico
             fig, axes = mpf.plot(df, type='candle', style='nightclouds',
-                               title=f'{simbolo} | {titulo_extra} | {config_optima["timeframe"]} | ESPERANDO REENTRY...',
+                               title=f'{simbolo} | {titulo_extra} | {config_optima["timeframe"]} | ⏳ ESPERANDO REENTRY',
                                ylabel='Precio',
                                addplot=apds,
                                volume=False,
@@ -3660,9 +3629,6 @@ class TradingBot:
                 pass
 
 # ---------------------------
-# CONFIGURACIÓN CON CREDENCIALES REALES DE BITGET FUTUROS
-# ---------------------------
-# ---------------------------
 # CONFIGURACIÓN SIMPLE
 # ---------------------------
 def crear_config_desde_entorno():
@@ -3676,34 +3642,27 @@ def crear_config_desde_entorno():
         'trend_threshold_degrees': 16.0,
         'min_trend_strength_degrees': 16.0,
         'entry_margin': 0.001,
-        'min_rr_ratio': 1.1,
-        'scan_interval_minutes': 6,  # Escaneo cada 2 minutos
-        'timeframes': ['5m', '15m', '30m', '1h', '4h'],
+        'min_rr_ratio': 1.2,
+        'scan_interval_minutes': 6,
+        'timeframes': ['5m', '15m', '30m', '1h'],
         'velas_options': [80, 100, 120, 150, 200],
         'symbols': [
-            # SOLO LOS QUE SÍ FUNCIONARON EN TU LOG (65)
-            'PEPEUSDT', 'WIFUSDT', 'FLOKIUSDT', 'SHIBUSDT', 'POPCATUSDT',
-            'CHILLGUYUSDT', 'PNUTUSDT', 'MEWUSDT', 'FARTCOINUSDT', 'DOGEUSDT',
-            'VINEUSDT', 'HIPPOUSDT', 'TRXUSDT', 'XLMUSDT', 'XRPUSDT',
-            'ADAUSDT', 'ATOMUSDT', 'ETCUSDT', 'LINKUSDT', 'UNIUSDT',
-            'SUSHIUSDT', 'CRVUSDT', 'SNXUSDT', 'SANDUSDT', 'MANAUSDT',
-            'AXSUSDT', 'LRCUSDT', 'ARBUSDT', 'OPUSDT', 'INJUSDT',
-            'FILUSDT', 'SUIUSDT', 'AAVEUSDT', 'COMPUSDT', 'ENSUSDT',
-            'LDOUSDT', 'RENDERUSDT', 'POLUSDT', 'ALGOUSDT', 'QNTUSDT',
-            '1INCHUSDT', 'CVCUSDT', 'STGUSDT', 'ENJUSDT', 'GALAUSDT',
-            'MAGICUSDT', 'REZUSDT', 'BLURUSDT', 'HMSTRUSDT', 'BEATUSDT',
-            'ZEREBROUSDT', 'ZENUSDT', 'CETUSUSDT', 'DRIFTUSDT', 'PHAUSDT',
-            'API3USDT', 'ACHUSDT', 'SPELLUSDT', 'ILVUSDT', 'YGGUSDT',
-            'GMXUSDT', 'C98USDT',
-            # Nuevos símbolos añadidos
-            'XMRUSDT', 'DOTUSDT', 'BNBUSDT', 'SOLUSDT', 'AVAXUSDT',
-            'VETUSDT', 'ICPUSDT', 'BCHUSDT', 'NEOUSDT', 'TIAUSDT',
-            'TONUSDT', 'NMRUSDT', 'TRUMPUSDT',
-            # Símbolos adicionales añadidos por el usuario
-            'IPUSDT', 'TAOUSDT', 'XPLUSDT', 'HOLOUSDT', 'MONUSDT',
-            'OGUSDT', 'MSTRUSDT', 'VIRTUALUSDT', 'NOTUSDT', 'ORDIUSDT',
-            'TLMUSDT', 'BOMEUSDT', 'KAITOUSDT', 'APEUSDT', 'METUSDT',
-            'TUTUSDT'
+            'XMRUSDT','AAVEUSDT','DOTUSDT','LINKUSDT',
+            'BNBUSDT','XRPUSDT','SOLUSDT','AVAXUSDT',
+            'DOGEUSDT','LTCUSDT','ATOMUSDT','XLMUSDT',
+            'ALGOUSDT','VETUSDT','ICPUSDT','FILUSDT',
+            'BCHUSDT','NEOUSDT','TRXUSDT','XTZUSDT',
+            'SUSHIUSDT','COMPUSDT','PEPEUSDT','ETCUSDT',
+            'SNXUSDT','RENDERUSDT','1INCHUSDT','UNIUSDT',
+            'ZILUSDT','HOTUSDT','ENJUSDT','HYPEUSDT',
+            'BEATUSDT','PIPPINUSDT','ADAUSDT','ASTERUSDT',
+            'ENAUSDT','TAOUSDT','LUNCUSDT','WLDUSDT',
+            'WIFUSDT','APTUSDT','HBARUSDT','CRVUSDT',
+            'LUNAUSDT','TIAUSDT','ARBUSDT','ONDOUSDT',
+            'FOLKSUSDT','BRETTUSDT','TRUMPUSDT',
+            'INJUSDT','ZECUSDT','NOTUSDT','SHIBUSDT',
+            'LDOUSDT','KASUSDT','STRKUSDT','DYDXUSDT',
+            'SEIUSDT','TONUSDT','NMRUSDT'
         ],
         'telegram_token': os.environ.get('TELEGRAM_TOKEN'),
         'telegram_chat_ids': telegram_chat_ids,
@@ -3775,6 +3734,7 @@ def health_check():
     except Exception as e:
         logger.error(f"Error en health check: {e}")
         return jsonify({"status": "error", "message": str(e)}), 500
+
 # Configuración automática del webhook
 def setup_telegram_webhook():
     token = os.environ.get('TELEGRAM_TOKEN')
