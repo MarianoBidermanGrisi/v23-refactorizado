@@ -30,6 +30,33 @@ logging.basicConfig(level=logging.INFO, stream=sys.stdout, format='%(asctime)s -
 logger = logging.getLogger(__name__)
 
 # ---------------------------
+# CONFIGURACIÓN DE FUENTES PARA EMOJIS
+# ---------------------------
+import matplotlib.font_manager as fm
+
+# Intentar encontrar fuentes que soporten emojis (Noto Sans Emoji, Segoe UI Emoji, etc.)
+font_paths = [
+    '/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc',  # Noto Sans CJK
+    '/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf',     # Noto Sans
+    '/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc',  # Noto Sans CJK (opentype)
+]
+
+available_font = None
+for font_path in font_paths:
+    if os.path.exists(font_path):
+        try:
+            fm.fontManager.addfont(font_path)
+            available_font = fm.FontProperties(fname=font_path)
+            logger.info(f" Fuente cargada para emojis: {font_path}")
+            break
+        except Exception as e:
+            logger.warning(f" No se pudo cargar fuente {font_path}: {e}")
+
+# Configurar fuentes por defecto para matplotlib
+plt.rcParams['font.family'] = ['DejaVu Sans', 'Noto Sans', 'sans-serif']
+plt.rcParams['axes.unicode_minus'] = False
+
+# ---------------------------
 # [INICIO DEL CÓDIGO DEL BOT NUEVO]
 # Copiado íntegro y corregido para ejecución local
 # ---------------------------
@@ -379,8 +406,8 @@ class BitgetClient:
             'orderType': 'market',
             'triggerType': 'mark_price',
             'triggerPrice': trigger_price_formatted,
-            # delegateType es OBLIGATORIO para Bitget API v2 (0 = límite, 1 = mercado)
-            'delegateType': '1',
+            # CORRECCIÓN ERROR 43011: delegateType debe ser ENTERO (no string)
+            'delegateType': 1,
             # CORRECCIÓN ERROR 40034: Estos parámetros son OBLIGATORIOS
             'stopLossTriggerType': 'mark_price',
             'stopSurplusTriggerType': 'mark_price'
@@ -2638,10 +2665,10 @@ class TradingBot:
             breakout_line = [precio_breakout] * len(df)
             if tipo_breakout == "BREAKOUT_LONG":
                 color_breakout = "#D68F01"
-                titulo_extra = "🚀 RUPTURA ALCISTA"
+                titulo_extra = "[LONG] RUPTURA"
             else:
                 color_breakout = '#D68F01'
-                titulo_extra = "📉 RUPTURA BAJISTA"
+                titulo_extra = "[SHORT] RUPTURA"
             apds.append(mpf.make_addplot(breakout_line, color=color_breakout, linestyle='-', width=3, panel=0, alpha=0.8))
             # Stochastic
             apds.append(mpf.make_addplot(df['Stoch_K'], color='#00BFFF', width=1.5, panel=1, ylabel='Stochastic'))
@@ -2652,7 +2679,7 @@ class TradingBot:
             apds.append(mpf.make_addplot(oversold, color="#E9E4E4", linestyle='--', width=0.8, panel=1, alpha=0.5))
             # Crear gráfico
             fig, axes = mpf.plot(df, type='candle', style='nightclouds',
-                               title=f'{simbolo} | {titulo_extra} | {config_optima["timeframe"]} | ⏳ ESPERANDO REENTRY',
+                               title=f'{simbolo} | {titulo_extra} | {config_optima["timeframe"]} | ESPERANDO REENTRY...',
                                ylabel='Precio',
                                addplot=apds,
                                volume=False,
