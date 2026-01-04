@@ -381,55 +381,55 @@ class BitgetClient:
         Args:
             symbol: Símbolo (ej: 'CRVUSDT')
             hold_side: 'long' o 'short'
-            trigger_price: Precio de activación del SL o TP
+            trigger_price: Precio de activación
             order_type: 'stop_loss' o 'take_profit'
             stop_loss_price: Precio de stop loss (opcional)
             take_profit_price: Precio de take profit (opcional)
             trade_direction: 'LONG' o 'SHORT' para redondeo correcto del SL
         """
-        # Determinar el planType según el tipo de orden
-        if order_type == 'stop_loss':
-            plan_type = 'loss_plan'
-        elif order_type == 'take_profit':
-            plan_type = 'profit_plan'
-        else:
-            plan_type = 'loss_plan'
-        
-        # CORRECCIÓN COMPLETA: Usar endpoint place-plan con planType correcto
-        # Según documentación Bitget v2, el endpoint correcto para TP/SL es:
-        # /api/v2/mix/order/place-plan con planType = 'loss_plan' o 'profit_plan'
-        request_path = '/api/v2/mix/order/place-plan'
+        # Endpoint correcto para TP/SL en posiciones existentes
+        request_path = '/api/v2/mix/order/place-pos-tpsl'
         
         # Determinar la dirección de la operación si no se proporciona
         if trade_direction is None:
             trade_direction = 'LONG' if hold_side == 'long' else 'SHORT'
         
-        # Calcular precisión adaptativa
-        precision = self.obtener_precision_adaptada(float(trigger_price), symbol)
-        trigger_price_formatted = self.redondear_precio_manual(float(trigger_price), precision, symbol)
+        # CORRECCIÓN: Usar precisión dinámica basada en el precio
+        precision_adaptada = self.obtener_precision_adaptada(trigger_price, symbol)
+        trigger_price_formatted = self.redondear_precio_manual(trigger_price, precision_adaptada)
         
-        # Cuerpo de la solicitud según documentación Bitget v2 para place-plan
         body = {
             'symbol': symbol,
             'productType': 'USDT-FUTURES',
             'marginCoin': 'USDT',
-            'planType': plan_type,  # 'loss_plan' para SL, 'profit_plan' para TP
-            'triggerType': 'mark_price',
-            'triggerPrice': trigger_price_formatted,
             'holdSide': hold_side,
             'orderType': 'market',
-            'size': '1',  # Tamaño dummy para órdenes TP/SL (el tamaño se ignora en este endpoint)
-            'delegateType': 1
+            'triggerType': 'mark_price',
+            'triggerPrice': trigger_price_formatted,
+            # delegateType es OBLIGATORIO para Bitget API v2 (0 = límite, 1 = mercado)
+            'delegateType': '1',
+            # CORRECCIÓN ERROR 40034: Estos parámetros son OBLIGATORIOS
+            'stopLossTriggerType': 'mark_price',
+            'stopSurplusTriggerType': 'mark_price'
         }
         
-        # Para órdenes de posición TP/SL, size debe ser la cantidad total de la posición
-        # Pero como no sabemos el tamaño exactamente, usamos un valor grande
-        # La API debería ignorar este valor para órdenes TP/SL
+        # CORRECCIÓN: Usar nombres correctos de parámetros según API Bitget v2
+        if order_type == 'stop_loss' and stop_loss_price:
+            precision_sl = self.obtener_precision_adaptada(stop_loss_price, symbol)
+            # Pasar la dirección para redondeo correcto del SL
+            stop_loss_formatted = self.redondear_precio_manual(stop_loss_price, precision_sl, symbol, trade_direction)
+            body['stopLossTriggerPrice'] = stop_loss_formatted
+            logger.info(f"[SL] {symbol}: precio={stop_loss_price}, precision={precision_sl}, formatted={stop_loss_formatted}, direccion={trade_direction}")
+        elif order_type == 'take_profit' and take_profit_price:
+            precision_tp = self.obtener_precision_adaptada(take_profit_price, symbol)
+            take_profit_formatted = self.redondear_precio_manual(take_profit_price, precision_tp, symbol)
+            body['stopSurplusTriggerPrice'] = take_profit_formatted
+            logger.info(f"[TP] {symbol}: precio={take_profit_price}, precision={precision_tp}, formatted={take_profit_formatted}")
         
         body_json = json.dumps(body, separators=(',', ':'), ensure_ascii=False)
         headers = self._get_headers('POST', request_path, body_json)
         
-        logger.info(f"📤 Enviando orden {order_type} para {symbol}: {body}")
+        logger.info(f"[ENVIO] Orden {order_type} para {symbol}: {body}")
         
         response = requests.post(
             self.base_url + request_path,
@@ -438,44 +438,28 @@ class BitgetClient:
             timeout=10
         )
         
-        logger.info(f"📤 Respuesta TP/SL BITGET: {response.status_code} - {response.text}")
+        logger.info(f"[RESPUESTA] TP/SL BITGET: {response.status_code} - {response.text}")
         
         if response.status_code == 200:
             data = response.json()
             if data.get('code') == '00000':
-                logger.info(f"✅ {order_type.upper()} creado correctamente para {symbol}")
+                logger.info(f"[OK] {order_type.upper()} creado correctamente para {symbol}")
                 return data.get('data')
             else:
                 # Error 40017: parámetros incorrectos
                 if data.get('code') == '40017':
-                    logger.error(f"❌ Error 40017 en {order_type}: {data.get('msg')}")
-                    logger.error(f"💡 Body enviado: {body}")
+                    logger.error(f"[ERROR] Error 40017 en {order_type}: {data.get('msg')}")
+                    logger.error(f"[DEBUG] Body enviado: {body}")
                 # Error 40034: faltan parámetros de tipo
                 if data.get('code') == '40034':
-                    logger.error(f"❌ Error 40034 en {order_type}: {data.get('msg')}")
-                    logger.error(f"💡 Body enviado: {body}")
+                    logger.error(f"[ERROR] Error 40034 en {order_type}: {data.get('msg')}")
+                    logger.error(f"[DEBUG] Body enviado: {body}")
                 # Error 43011: delegateType error
                 if data.get('code') == '43011':
-                    logger.error(f"❌ Error 43011 en {order_type}: {data.get('msg')}")
-                    logger.error(f"💡 Body enviado: {body}")
-                    # Try con orderType = 'limit' como alternativa
-                    logger.info(f"🔄 Reintentando con orderType='limit'...")
-                    body['orderType'] = 'limit'
-                    body['delegateType'] = 0
-                    body_json = json.dumps(body, separators=(',', ':'), ensure_ascii=False)
-                    response = requests.post(
-                        self.base_url + request_path,
-                        headers=headers,
-                        data=body_json,
-                        timeout=10
-                    )
-                    if response.status_code == 200:
-                        data = response.json()
-                        if data.get('code') == '00000':
-                            logger.info(f"✅ {order_type.upper()} creado (con limit) para {symbol}")
-                            return data.get('data')
+                    logger.error(f"[ERROR] Error 43011 en {order_type}: {data.get('msg')}")
+                    logger.error(f"[DEBUG] Body enviado: {body}")
         
-        logger.error(f"❌ Error creando {order_type}: {response.text}")
+        logger.error(f"[ERROR] Error creando {order_type}: {response.text}")
         return None
 
     def place_plan_order(self, symbol, hold_side, trigger_price, plan_type):
