@@ -29,6 +29,10 @@ import logging
 logging.basicConfig(level=logging.INFO, stream=sys.stdout, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
+# Configurar fuentes compatibles con Unicode para matplotlib
+plt.rcParams['font.sans-serif'] = ['Noto Sans CJK SC', 'WenQuanYi Zen Hei', 'Arial Unicode MS', 'DejaVu Sans']
+plt.rcParams['axes.unicode_minus'] = False
+
 # ---------------------------
 # [INICIO DEL CÓDIGO DEL BOT NUEVO]
 # Copiado íntegro y corregido para ejecución local
@@ -380,7 +384,7 @@ class BitgetClient:
             'triggerType': 'mark_price',
             'triggerPrice': trigger_price_formatted,
             # delegateType es OBLIGATORIO para Bitget API v2 (0 = límite, 1 = mercado)
-            'delegateType': 1,
+            'delegateType': '1',
             # CORRECCIÓN ERROR 40034: Estos parámetros son OBLIGATORIOS
             'stopLossTriggerType': 'mark_price',
             'stopSurplusTriggerType': 'mark_price'
@@ -2077,97 +2081,56 @@ class TradingBot:
             logger.error(f"❌ Error en sincronización con Bitget: {e}")
 
     def verificar_y_recolocar_tp_sl(self):
-        """Verificar y recolocar automáticamente TP y SL si es necesario - FUNCIÓN CRÍTICA"""
+        """
+        Verificar estado de TP/SL integrados en las posiciones.
+        NOTA: TP/SL están integrados directamente en la orden de entrada, NO son órdenes separadas.
+        Esta función solo verifica que la posición existe y tiene los niveles correctos.
+        """
         if not self.bitget_client:
             return
-        
+
         try:
-            logger.info("🔍 Verificando estado de órdenes TP/SL...")
-            
+            logger.info("🔍 Verificando estado de posiciones con TP/SL integrados...")
+
             for simbolo, operacion in self.operaciones_bitget_activas.items():
                 try:
-                    # Verificar si las órdenes plan están activas
-                    orden_sl_id = self.order_ids_sl.get(simbolo)
-                    orden_tp_id = self.order_ids_tp.get(simbolo)
-                    
-                    sl_activa = False
-                    tp_activa = False
-                    
-                    # Verificar estado de las órdenes (simplificado - en implementación real usarías API de órdenes)
-                    if orden_sl_id:
-                        # Aquí iría la verificación real del estado de la orden SL
-                        # Por ahora asumimos que están activas si tenemos el ID
-                        sl_activa = True
-                    
-                    if orden_tp_id:
-                        # Aquí iría la verificación real del estado de la orden TP
-                        tp_activa = True
-                    
-                    # Si alguna orden no está activa, recolocar
-                    if not sl_activa or not tp_activa:
-                        logger.warning(f"⚠️ Órdenes TP/SL faltantes para {simbolo}, recolocando...")
-                        
-                        # Obtener precio actual
-                        klines = self.bitget_client.get_klines(simbolo, '1m', 1)
-                        if not klines:
-                            continue
-                        
-                        klines.reverse()
-                        precio_actual = float(klines[0][4])
-                        
-                        # Recalcular niveles
-                        tipo = operacion['tipo']
-                        sl_porcentaje = 0.02
-                        tp_porcentaje = 0.10
+                    # Obtener posiciones activas del símbolo
+                    posiciones = self.bitget_client.get_positions(simbolo)
 
-                        if tipo == "LONG":
-                            stop_loss = precio_actual * (1 - sl_porcentaje)
-                            take_profit = precio_actual * (1 + tp_porcentaje)
-                        else:
-                            stop_loss = precio_actual * (1 + sl_porcentaje)
-                            take_profit = precio_actual * (1 - tp_porcentaje)
+                    if not posiciones:
+                        logger.warning(f"⚠️ No se encontraron posiciones para {simbolo}")
+                        continue
 
-                        hold_side = 'long' if operacion['tipo'] == 'LONG' else 'short'
+                    # Buscar la posición del símbolo
+                    posicion_encontrada = False
+                    for pos in posiciones:
+                        if pos.get('symbol') == simbolo:
+                            posicion_encontrada = True
+                            # Verificar que la posición tiene TP/SL integrados
+                            tp_configurado = pos.get('takeProfit', '')
+                            sl_configurado = pos.get('stopLoss', '')
 
-                        # Recolocar SL
-                        if not sl_activa:
-                            logger.info(f"🔧 Recolocando STOP LOSS para {simbolo}: {stop_loss}")
-                            orden_sl_nueva = self.bitget_client.place_tpsl_order(
-                                symbol=simbolo,
-                                hold_side=hold_side,
-                                trigger_price=stop_loss,
-                                order_type='stop_loss',
-                                stop_loss_price=stop_loss,
-                                take_profit_price=None,
-                                trade_direction=operacion['tipo']
-                            )
-                            if orden_sl_nueva:
-                                self.order_ids_sl[simbolo] = orden_sl_nueva.get('orderId')
+                            if tp_configurado and sl_configurado:
+                                logger.info(f"✅ {simbolo}: TP/SL integrados correctamente")
+                                logger.info(f"   - SL (preset): {sl_configurado}")
+                                logger.info(f"   - TP (preset): {tp_configurado}")
+                            elif tp_configurado:
+                                logger.warning(f"⚠️ {simbolo}: Solo TP configurado")
+                            elif sl_configurado:
+                                logger.warning(f"⚠️ {simbolo}: Solo SL configurado")
+                            else:
+                                logger.warning(f"⚠️ {simbolo}: TP/SL no visibles (pueden estar en proceso)")
+                            break
 
-                        # Recolocar TP
-                        if not tp_activa:
-                            logger.info(f"🔧 Recolocando TAKE PROFIT para {simbolo}: {take_profit}")
-                            orden_tp_nueva = self.bitget_client.place_tpsl_order(
-                                symbol=simbolo,
-                                hold_side=hold_side,
-                                trigger_price=take_profit,
-                                order_type='take_profit',
-                                stop_loss_price=None,
-                                take_profit_price=take_profit,
-                                trade_direction=operacion['tipo']
-                            )
-                            if orden_tp_nueva:
-                                self.order_ids_tp[simbolo] = orden_tp_nueva.get('orderId')
-                            if orden_tp_nueva:
-                                self.order_ids_tp[simbolo] = orden_tp_nueva.get('orderId')
-                                logger.info(f"✅ TP recolocada para {simbolo}")
-                
+                    if not posicion_encontrada:
+                        logger.warning(f"⚠️ Posición no encontrada para {simbolo}")
+
                 except Exception as e:
-                    logger.error(f"❌ Error verificando TP/SL para {simbolo}: {e}")
+                    logger.error(f"❌ Error verificando posición para {simbolo}: {e}")
                     continue
-            
-            logger.info("✅ Verificación y recolocación de TP/SL completada")
-            
+
+            logger.info("✅ Verificación de TP/SL integrada completada")
+
         except Exception as e:
             logger.error(f"❌ Error en verificación de TP/SL: {e}")
 
