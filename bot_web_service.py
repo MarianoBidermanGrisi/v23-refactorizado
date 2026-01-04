@@ -1115,25 +1115,12 @@ def ejecutar_operacion_bitget(bitget_client, simbolo, tipo_operacion, capital_us
         
         klines = bitget_client.get_klines(simbolo, '1m', 1)
         if not klines or len(klines) == 0:
-            logger.error(f"No se pudo obtener precio de {simbolo}")
-            try:
-                url = "https://api.binance.com/api/v3/ticker/price"
-                params = {'symbol': simbolo}
-                response = requests.get(url, params=params, timeout=5)
-                if response.status_code == 200:
-                    data = response.json()
-                    precio_actual = float(data['price'])
-                    logger.info(f"Precio actual (de Binance): {precio_actual:.8f}")
-                else:
-                    logger.error("No se pudo obtener precio de ninguna fuente")
-                    return None
-            except Exception as e:
-                logger.error(f"Error obteniendo precio de Binance: {e}")
-                return None
+            logger.error(f"No se pudo obtener precio de {simbolo} desde Bitget")
+            return None
         else:
             klines.reverse()
             precio_actual = float(klines[0][4])
-            logger.info(f"Precio actual: {precio_actual:.8f}")
+            logger.info(f"Precio actual (Bitget): {precio_actual:.8f}")
         
         symbol_info = bitget_client.get_symbol_info(simbolo)
         if not symbol_info:
@@ -1381,24 +1368,29 @@ class TradingBot:
             return None
 
     def obtener_datos_mercado_config(self, symbol, timeframe='5m', limit=200):
-        """Obtener datos de mercado con fallback a Binance"""
+        """Obtener datos de mercado EXCLUSIVAMENTE de Bitget"""
         try:
             if self.bitget_client:
                 klines = self.bitget_client.get_klines(symbol, timeframe, limit)
-                if klines:
+                if klines and len(klines) > 0:
                     cierres = [float(k[4]) for k in klines]
                     maximos = [float(k[2]) for k in klines]
                     minimos = [float(k[3]) for k in klines]
+                    logger.debug(f"Datos obtenidos de Bitget para {symbol}: {len(klines)} velas")
                     return {
                         'cierres': cierres,
                         'maximos': maximos,
                         'minimos': minimos,
                         'precio_actual': cierres[-1] if cierres else 0
                     }
-            
-            return self.obtener_datos_mercado(symbol, timeframe, limit)
+                else:
+                    logger.warning(f"No hay datos disponibles de Bitget para {symbol}")
+                    return None
+            else:
+                logger.error("Bitget client no configurado")
+                return None
         except Exception as e:
-            logger.error(f"Error en obtener_datos_mercado_config: {e}")
+            logger.error(f"Error en obtener_datos_mercado_config para {symbol}: {e}")
             return None
 
     def calcular_canal_regresion(self, cierres, maximos, minimos, num_velas=80):
@@ -1604,17 +1596,20 @@ class TradingBot:
             # Solo imprimir si el canal cumple los criterios mínimos
             min_ancho = self.config.get('min_channel_width_percent', 4)
             if ancho >= min_ancho and abs(info_canal.get('coeficiente_pearson', 0)) >= 0.4:
-                logger.info(f"📊 {simbolo} - {config_optima['timeframe']} - {config_optima['num_velas']}v | "
+                logger.info(f"  📊 {simbolo} - {config_optima['timeframe']} - {config_optima['num_velas']}v | "
                            f"{direccion_emoji} ({angulo:.1f}° - {fuerza}) | "
                            f"Ancho: {ancho:.1f}% - Stoch: {stoch_k:.1f}/{stoch_d:.1f} {stoch_emoji} | Precio: {posicion}")
         except Exception as e:
-            pass  # Silencioso en caso de error en logging
+            logger.error(f"Error en _log_simbolo_analizado para {simbolo}: {e}")
 
     def escanear_mercado(self):
         """Escanear mercado en busca de señales"""
         logger.info(f"Escaneando {len(self.symbols)} simbolos (Estrategia: Breakout + Reentry)...")
 
         senales_encontradas = 0
+        simbolos_analizados = 0
+        simbolos_sin_datos = 0
+        simbolos_sin_canal_valido = 0
 
         for simbolo in self.symbols:
             try:
@@ -1626,6 +1621,7 @@ class TradingBot:
                     for num_velas in self.velas_options:
                         datos = self.obtener_datos_mercado_config(simbolo, tf, num_velas)
                         if not datos:
+                            simbolos_sin_datos += 1
                             continue
 
                         canal = self.calcular_canal_regresion_config(datos, num_velas)
@@ -1647,8 +1643,10 @@ class TradingBot:
                                 info_canal = canal
 
                 if not datos_mercado:
+                    simbolos_sin_canal_valido += 1
                     continue
 
+                simbolos_analizados += 1
                 config_optima = self.config_optima_por_simbolo.get(simbolo, mejor_config)
 
                 # Log informativo del símbolo analizado
@@ -1700,6 +1698,9 @@ class TradingBot:
             except Exception as e:
                 logger.error(f"Error analizando {simbolo}: {e}")
                 continue
+
+        # Resumen del escaneo
+        logger.info(f"Resumen: {simbolos_analizados} simbolos con canal valido, {simbolos_sin_datos} sin datos de mercado, {simbolos_sin_canal_valido} sin canal cumple criterios")
 
         if self.esperando_reentry:
             logger.info(f"Esperando reentry en {len(self.esperando_reentry)} simbolos:")
@@ -2126,19 +2127,26 @@ Velas: {datos_operacion.get('velas_utilizadas', 0)}
             config_optima = self.config_optima_por_simbolo.get(simbolo)
             if not config_optima:
                 return None
-            
+
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore")
-            
-            url = "https://api.binance.com/api/v3/klines"
-            params = {
-                'symbol': simbolo,
-                'interval': config_optima['timeframe'],
-                'limit': config_optima['num_velas']
-            }
-            respuesta = requests.get(url, params=params, timeout=10)
-            klines = respuesta.json()
-            
+
+            # Usar Bitget exclusivamente para obtener datos del gráfico
+            if self.bitget_client:
+                klines = self.bitget_client.get_klines(
+                    simbolo,
+                    config_optima['timeframe'],
+                    config_optima['num_velas']
+                )
+                if klines and len(klines) > 0:
+                    logger.debug(f"Generando gráfico con datos de Bitget para {simbolo}")
+                else:
+                    logger.warning(f"No hay datos de Bitget para generar gráfico de {simbolo}")
+                    return None
+            else:
+                logger.error("Bitget client no configurado para generar gráfico")
+                return None
+
             df_data = []
             for kline in klines:
                 df_data.append({
@@ -2151,11 +2159,11 @@ Velas: {datos_operacion.get('velas_utilizadas', 0)}
                 })
             df = pd.DataFrame(df_data)
             df.set_index('Date', inplace=True)
-            
+
             tiempos_reg = list(range(len(df)))
             resistencia_values = []
             soporte_values = []
-            
+
             for i, t in enumerate(tiempos_reg):
                 resist = info_canal['pendiente_resistencia'] * t + \
                         (info_canal['resistencia'] - info_canal['pendiente_resistencia'] * tiempos_reg[-1])
@@ -2419,7 +2427,7 @@ def crear_config_desde_entorno():
         'entry_margin': 0.001,
         'min_rr_ratio': 1.2,
         'scan_interval_minutes': 6,
-        'timeframes': ['5m', '15m', '30m', '1h','4h'],
+        'timeframes': ['5m', '15m', '30m', '1h'],
         'velas_options': [80, 100, 120, 150, 200],
         'symbols': [
             'XMRUSDT','AAVEUSDT','DOTUSDT','LINKUSDT',
