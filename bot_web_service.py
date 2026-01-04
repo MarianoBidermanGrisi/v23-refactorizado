@@ -3631,28 +3631,22 @@ class TradingBot:
 # ---------------------------
 # CONFIGURACIÓN CON CREDENCIALES REALES DE BITGET FUTUROS
 # ---------------------------
-def crear_config_completa():
-    """Configuración completa con credenciales REALES de Bitget Futures y Telegram"""
-    
-    # CREDENCIALES REALES DE BITGET FUTUROS (tomadas de automatico.py)
-    BITGET_API_KEY = 'bg_0e9c732f2ed08d90c986a7fd9a4cdedd'
-    BITGET_SECRET_KEY = '52582b11761d83bce4e4475182b1510617081dd4e56051e787178a2a06a5bd3b'
-    BITGET_PASSPHRASE = 'Rasputino977'
-    
-    # CREDENCIALES REALES DE TELEGRAM (tomadas de automatico.py)
-    TELEGRAM_TOKEN = '8406173543:AAFIuYlFd3jtAF1Q6SNntUGn1PopgkZ7S0k'
-    TELEGRAM_CHAT_ID = '2108159591'
-    
-    # Directorio actual para archivos
+# ---------------------------
+# CONFIGURACIÓN SIMPLE
+# ---------------------------
+def crear_config_desde_entorno():
+    """Configuración desde variables de entorno"""
     directorio_actual = os.path.dirname(os.path.abspath(__file__))
+    telegram_chat_ids_str = os.environ.get('TELEGRAM_CHAT_ID', '1570204748')
+    telegram_chat_ids = [cid.strip() for cid in telegram_chat_ids_str.split(',') if cid.strip()]
     
     return {
         'min_channel_width_percent': 4.0,
         'trend_threshold_degrees': 16.0,
         'min_trend_strength_degrees': 16.0,
         'entry_margin': 0.001,
-        'min_rr_ratio': 1.2,
-        'scan_interval_minutes': 2,  # Escaneo cada 2 minutos
+        'min_rr_ratio': 1.1,
+        'scan_interval_minutes': 6,  # Escaneo cada 2 minutos
         'timeframes': ['5m', '15m', '30m', '1h', '4h'],
         'velas_options': [80, 100, 120, 150, 200],
         'symbols': [
@@ -3680,40 +3674,41 @@ def crear_config_completa():
             'TLMUSDT', 'BOMEUSDT', 'KAITOUSDT', 'APEUSDT', 'METUSDT',
             'TUTUSDT'
         ],
-        'telegram_token': TELEGRAM_TOKEN,
-        'telegram_chat_ids': [TELEGRAM_CHAT_ID],
+        'telegram_token': os.environ.get('TELEGRAM_TOKEN'),
+        'telegram_chat_ids': telegram_chat_ids,
         'auto_optimize': True,
-        'min_samples_optimizacion': 15,
+        'min_samples_optimizacion': 30,
         'reevaluacion_horas': 24,
-        'log_path': os.path.join(directorio_actual, 'operaciones_log_v23_real.csv'),
-        'estado_file': os.path.join(directorio_actual, 'estado_bot_v23_real.json'),
-        # CREDENCIALES REALES DE BITGET FUTUROS
-        'bitget_api_key': BITGET_API_KEY,
-        'bitget_api_secret': BITGET_SECRET_KEY,
-        'bitget_passphrase': BITGET_PASSPHRASE,
-        'ejecutar_operaciones_automaticas': True,  # ACTIVADO para operar con dinero REAL
-        # MARGIN USDT: SIEMPRE se calcula dinámicamente como 3% del saldo de la cuenta
-        'leverage_por_defecto': 20  # 20x apalancamiento
+        'log_path': os.path.join(directorio_actual, 'operaciones_log_v23.csv'),
+        'estado_file': os.path.join(directorio_actual, 'estado_bot_v23.json'),
+        'bitget_api_key': os.environ.get('BITGET_API_KEY'),
+        'bitget_api_secret': os.environ.get('BITGET_SECRET_KEY'),
+        'bitget_passphrase': os.environ.get('BITGET_PASSPHRASE'),
+        'webhook_url': os.environ.get('WEBHOOK_URL'),
+        'ejecutar_operaciones_automaticas': os.environ.get('EJECUTAR_OPERACIONES_AUTOMATICAS', 'false').lower() == 'true',
+        'capital_por_operacion': float(os.environ.get('CAPITAL_POR_OPERACION', '4')),
+        'leverage_por_defecto': min(int(os.environ.get('LEVERAGE_POR_DEFECTO', '10')), 10)
     }
 
 # ---------------------------
-# FLASK APP PARA EJECUCIÓN LOCAL
+# FLASK APP Y RENDER
 # ---------------------------
 
 app = Flask(__name__)
 
-# Crear bot con configuración completa
-config = crear_config_completa()
+# Crear bot con configuración desde entorno
+config = crear_config_desde_entorno()
 bot = TradingBot(config)
 
 def run_bot_loop():
     """Ejecuta el bot en un hilo separado"""
+    logger.info("🤖 Iniciando hilo del bot...")
     while True:
         try:
             bot.ejecutar_analisis()
-            time.sleep(bot.config.get('scan_interval_minutes', 2) * 60)
+            time.sleep(bot.config.get('scan_interval_minutes', 1) * 60)
         except Exception as e:
-            print(f"Error en el hilo del bot: {e}", file=sys.stderr)
+            logger.error(f"❌ Error en el hilo del bot: {e}", exc_info=True)
             time.sleep(60)
 
 # Iniciar hilo del bot
@@ -3722,37 +3717,66 @@ bot_thread.start()
 
 @app.route('/')
 def index():
-    return "Bot Breakout + Reentry con integración Bitget FUTUROS está en línea.", 200
+    return "✅ Bot Breakout + Reentry con integración Bitget está en línea.", 200
 
 @app.route('/webhook', methods=['POST'])
 def telegram_webhook():
     if request.is_json:
         update = request.get_json()
-        print(f"Update recibido: {json.dumps(update)}", file=sys.stdout)
+        logger.info(f"📩 Update recibido: {json.dumps(update)}")
         return jsonify({"status": "ok"}), 200
     return jsonify({"error": "Request must be JSON"}), 400
 
-# Función para ejecutar el bot directamente
-def ejecutar_bot_directamente():
-    """Ejecuta el bot directamente sin Flask"""
-    print("="*70)
-    print("🚨 BOT BREAKOUT+REENTRY COMPLETO - BITGET FUTUROS")
-    print("🔧 Características completas:")
-    print("   1. ✅ Estrategia Breakout+Reentry con confirmación Stochastic")
-    print("   2. ✅ Gráficos profesionales con mplfinance")
-    print("   3. ✅ Conexión REAL a Bitget Futures (Dinero REAL)")
-    print("   4. ✅ Trading automático REAL con SL/TP")
-    print("   5. ✅ Optimizador IA automático")
-    print("   6. ✅ Alertas Telegram con gráficos")
-    print("   7. ✅ Persistencia de estado")
-    print("="*70)
+@app.route('/health', methods=['GET'])
+def health_check():
+    """Endpoint para verificar el estado del bot"""
+    try:
+        status = {
+            "status": "running",
+            "timestamp": datetime.now().isoformat(),
+            "operaciones_activas": len(bot.operaciones_activas),
+            "esperando_reentry": len(bot.esperando_reentry),
+            "total_operaciones": bot.total_operaciones,
+            "bitget_conectado": bot.bitget_client is not None,
+            "auto_trading": bot.ejecutar_operaciones_automaticas
+        }
+        return jsonify(status), 200
+    except Exception as e:
+        logger.error(f"Error en health check: {e}")
+        return jsonify({"status": "error", "message": str(e)}), 500
+# Configuración automática del webhook
+def setup_telegram_webhook():
+    token = os.environ.get('TELEGRAM_TOKEN')
+    if not token:
+        logger.warning("⚠️ No hay token de Telegram configurado")
+        return
     
-    bot.iniciar()
+    webhook_url = os.environ.get('WEBHOOK_URL')
+    if not webhook_url:
+        render_url = os.environ.get('RENDER_EXTERNAL_URL')
+        if render_url:
+            webhook_url = f"{render_url}/webhook"
+        else:
+            logger.warning("⚠️ No hay URL de webhook configurada")
+            return
+    
+    try:
+        logger.info(f"🔗 Configurando webhook Telegram en: {webhook_url}")
+        # Eliminar webhook anterior
+        requests.get(f"https://api.telegram.org/bot{token}/deleteWebhook", timeout=10)
+        time.sleep(1)
+        # Configurar nuevo webhook
+        response = requests.get(f"https://api.telegram.org/bot{token}/setWebhook?url={webhook_url}", timeout=10)
+        
+        if response.status_code == 200:
+            logger.info("✅ Webhook de Telegram configurado correctamente")
+        else:
+            logger.error(f"❌ Error configurando webhook: {response.status_code} - {response.text}")
+    except Exception as e:
+        logger.error(f"❌ Error configurando webhook: {e}")
 
 if __name__ == '__main__':
-    # Para ejecución local, inicia el bot directamente
-    # o comenta la siguiente línea y descomenta app.run() para usar Flask
-    #ejecutar_bot_directamente()
-    
-    # Si prefieres usar Flask (ejecuta en http://localhost:5000)
-    app.run(debug=True, host='0.0.0.0', port=5000)
+    logger.info("🚀 Iniciando aplicación Flask...")
+    setup_telegram_webhook()
+    port = int(os.environ.get('PORT', 5000))
+    app.run(debug=False, host='0.0.0.0', port=port)
