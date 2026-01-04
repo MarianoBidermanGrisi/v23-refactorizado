@@ -2361,7 +2361,7 @@ def crear_config_desde_entorno():
         'entry_margin': 0.001,
         'min_rr_ratio': 1.2,
         'scan_interval_minutes': 6,
-        'timeframes': ['5m', '15m', '30m', '1h'],
+        'timeframes': ['5m', '15m', '30m', '1h','4h'],
         'velas_options': [80, 100, 120, 150, 200],
         'symbols': [
             'XMRUSDT','AAVEUSDT','DOTUSDT','LINKUSDT',
