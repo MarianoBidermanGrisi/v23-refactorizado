@@ -2874,41 +2874,67 @@ class TradingBot:
         return None
 
     def detectar_reentry(self, simbolo, info_canal, datos_mercado):
-        """Detecta si el precio ha REINGRESADO al canal"""
+        """
+        Detecta si el precio ha REINGRESADO al canal después del breakout.
+        
+        CORRECCIÓN CRÍTICA: La señal debe coincidir con la TENDENCIA del canal, 
+        NO con el tipo de breakout.
+        
+        Lógica correcta según estrategia Breakout + Reentry:
+        - Canal ALCISTA: La entrada SIEMPRE es LONG (el breakout es continuación de tendencia)
+        - Canal BAJISTA: La entrada SIEMPRE es SHORT (el breakout es continuación de tendencia)
+        
+        El breakout NO es una señal de reversión, es una señal de CONTINUACIÓN de tendencia.
+        Por lo tanto:
+        - En canal ALCISTA, aunque el precio rompa la resistencia, la entrada sigue siendo LONG
+        - En canal BAJISTA, aunque el precio rompa el soporte, la entrada sigue siendo SHORT
+        """
         if simbolo not in self.esperando_reentry:
             return None
+        
         breakout_info = self.esperando_reentry[simbolo]
         tipo_breakout = breakout_info['tipo']
         timestamp_breakout = breakout_info['timestamp']
         tiempo_desde_breakout = (datetime.now() - timestamp_breakout).total_seconds() / 60
+        
+        # Timeout de reentry (30 minutos máximo)
         if tiempo_desde_breakout > 120:
             print(f"     ⏰ {simbolo} - Timeout de reentry (>30 min), cancelando espera")
             del self.esperando_reentry[simbolo]
             if simbolo in self.breakouts_detectados:
                 del self.breakouts_detectados[simbolo]
             return None
+        
         precio_actual = datos_mercado['precio_actual']
         resistencia = info_canal['resistencia']
         soporte = info_canal['soporte']
         stoch_k = info_canal['stoch_k']
         stoch_d = info_canal['stoch_d']
+        direccion_tendencia = info_canal.get('direccion', 'RANGO')
+        
         tolerancia = 0.001 * precio_actual
-        if tipo_breakout == "BREAKOUT_LONG":
+        
+        # CORRECCIÓN: La señal depende de la TENDENCIA del canal, NO del tipo de breakout
+        if direccion_tendencia == '🟢 ALCISTA':
+            # Canal ALCISTA: La entrada SIEMPRE es LONG
             if soporte <= precio_actual <= resistencia:
                 distancia_soporte = abs(precio_actual - soporte)
                 if distancia_soporte <= tolerancia and stoch_k <= 30 and stoch_d <= 30:
-                    print(f"     ✅ {simbolo} - REENTRY LONG confirmado! Entrada en soporte con Stoch oversold")
+                    print(f"     ✅ {simbolo} - REENTRY LONG confirmado! (Canal ALCISTA, precio en soporte)")
                     if simbolo in self.breakouts_detectados:
                         del self.breakouts_detectados[simbolo]
                     return "LONG"
-        elif tipo_breakout == "BREAKOUT_SHORT":
+                    
+        elif direccion_tendencia == '🔴 BAJISTA':
+            # Canal BAJISTA: La entrada SIEMPRE es SHORT
             if soporte <= precio_actual <= resistencia:
                 distancia_resistencia = abs(precio_actual - resistencia)
                 if distancia_resistencia <= tolerancia and stoch_k >= 70 and stoch_d >= 70:
-                    print(f"     ✅ {simbolo} - REENTRY SHORT confirmado! Entrada en resistencia con Stoch overbought")
+                    print(f"     ✅ {simbolo} - REENTRY SHORT confirmado! (Canal BAJISTA, precio en resistencia)")
                     if simbolo in self.breakouts_detectados:
                         del self.breakouts_detectados[simbolo]
                     return "SHORT"
+        
         return None
 
     def calcular_niveles_entrada(self, tipo_operacion, info_canal, precio_actual):
