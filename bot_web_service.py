@@ -30,23 +30,26 @@ logging.basicConfig(level=logging.INFO, stream=sys.stdout, format='%(asctime)s -
 logger = logging.getLogger(__name__)
 
 # Configurar fuentes compatibles con Unicode y emojis para matplotlib
-# CORRECCIÓN: Agregar fuentes que soportan emojis para evitar warnings de glyps faltantes
+# CORRECCIÓN: Usar fuentes más seguras que estén disponibles en la mayoría de servidores
 try:
-    # Lista de fuentes con soporte para emojis, ordenadas por preferencia
-    fuentes_emoji = [
-        'Noto Color Emoji',      # Google Noto Color Emoji (mejor soporte)
-        'Apple Color Emoji',     # Emoji de Apple (macOS/iOS)
-        'Segoe UI Emoji',        # Emoji de Windows
-        'Twemoji Mozilla',       # Twemoji de Mozilla
+    # Lista de fuentes ordenadas por disponibilidad en servidores Linux
+    fuentes_seguras = [
+        'DejaVu Sans',           # Estándar en Linux, mejor compatibilidad básica
         'Noto Sans CJK SC',      # Chino simplificado
         'WenQuanYi Zen Hei',     # Chino tradicional
         'Arial Unicode MS',      # Unicode genérico de Microsoft
-        'DejaVu Sans',           # Fallback por defecto
+        'Liberation Sans',       # Alternativa a Arial en Linux
+        'FreeSans',              # Fuente libre GNU
     ]
-    plt.rcParams['font.sans-serif'] = fuentes_emoji
+    plt.rcParams['font.sans-serif'] = fuentes_seguras
     plt.rcParams['axes.unicode_minus'] = False
-    # Intentar usar fuentes emoji sin forzar la familia
     plt.rcParams['font.family'] = 'sans-serif'
+    
+    # Deshabilitar el uso de fuentes emoji en matplotlib para evitar warnings
+    # Los glypos de emoji no son críticos para los gráficos de trading
+    import warnings
+    warnings.filterwarnings('ignore', category=UserWarning, module='matplotlib')
+    
 except Exception as e:
     logger.warning(f"⚠️ Error configurando fuentes: {e}")
 
@@ -2687,7 +2690,8 @@ class TradingBot:
         """
         try:
             import matplotlib.font_manager as fm
-            plt.rcParams['font.family'] = ['DejaVu Sans', 'Segoe UI Emoji', 'Apple Color Emoji', 'Noto Color Emoji']
+            # Usar fuentes seguras disponibles en servidores Linux
+            plt.rcParams['font.family'] = ['DejaVu Sans', 'Arial Unicode MS', 'Liberation Sans', 'FreeSans']
             
             # Usar API de Bitget FUTUROS si está disponible
             if self.bitget_client:
@@ -2805,10 +2809,10 @@ class TradingBot:
             breakout_line = [precio_breakout] * len(df)
             if tipo_breakout == "BREAKOUT_LONG":
                 color_breakout = "#D68F01"
-                titulo_extra = "🚀 RUPTURA ALCISTA"
+                titulo_extra = "RUPTURA ALCISTA"
             else:
                 color_breakout = '#D68F01'
-                titulo_extra = "📉 RUPTURA BAJISTA"
+                titulo_extra = "RUPTURA BAJISTA"
             apds.append(mpf.make_addplot(breakout_line, color=color_breakout, linestyle='-', width=3, panel=0, alpha=0.8))
             # Stochastic
             apds.append(mpf.make_addplot(df['Stoch_K'], color='#00BFFF', width=1.5, panel=1, ylabel='Stochastic'))
@@ -2819,7 +2823,7 @@ class TradingBot:
             apds.append(mpf.make_addplot(oversold, color="#E9E4E4", linestyle='--', width=0.8, panel=1, alpha=0.5))
             # Crear gráfico
             fig, axes = mpf.plot(df, type='candle', style='nightclouds',
-                               title=f'{simbolo} | {titulo_extra} | {config_optima["timeframe"]} | ⏳ ESPERANDO REENTRY',
+                               title=f'{simbolo} | {titulo_extra} | {config_optima["timeframe"]} | ESPERANDO REENTRY',
                                ylabel='Precio',
                                addplot=apds,
                                volume=False,
