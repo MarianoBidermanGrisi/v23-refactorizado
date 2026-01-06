@@ -415,56 +415,90 @@ class BitgetClient:
     def obtener_tick_size(self, symbol):
         """
         Calcula el tamaño del tick (mínimo movimiento de precio) para un símbolo.
-        
-        CORRECCIÓN: El tick size se calcula correctamente basándose en priceScale,
-        y se ajusta a valores estándar para evitar errores de la API.
-        
+
+        CORRECCIÓN COMPLETA: El tick size se calcula EXACTAMENTE desde priceScale
+        sin ajustes artificiales. Para Bitget, el tick es 1 / (10^priceScale).
+
         Args:
             symbol: Símbolo de trading
-        
+
         Returns:
-            float: Tamaño del tick
+            float: Tamaño del tick exacto
         """
         try:
             symbol_info = self.get_symbol_info(symbol)
             if symbol_info:
                 price_scale = int(symbol_info.get('priceScale', 4))
-                # El tick es 1 en la escala de precio
+                # El tick es exactamente 1 en la escala de precio del exchange
+                # NO ajustar a "valores estándar" - usar el cálculo exacto
                 tick = 1 / (10 ** price_scale)
-                
-                # CORRECCIÓN CRÍTICA: Ajustar el tick a valores estándar
-                # Esto evita el error 45115 de Bitget
-                tick = float(tick)
-                if tick < 0.00000001:
-                    tick = 0.00000001
-                elif tick < 0.000001:
-                    tick = 0.000001
-                elif tick < 0.00001:
-                    tick = 0.00001
-                elif tick < 0.0001:
-                    tick = 0.0001
-                elif tick < 0.001:
-                    tick = 0.001  # Para AVAXUSDT y similares
-                elif tick < 0.01:
-                    tick = 0.01
-                
+
                 logger.info(f"📊 {symbol}: Tick size = {tick} (priceScale={price_scale})")
                 return tick
-            
+
             # Fallback para símbolos desconocidos
-            return 0.001  # Tick por defecto más seguro
-            
+            return 0.0001  # Tick por defecto más común
+
         except Exception as e:
             logger.error(f"Error calculando tick size para {symbol}: {e}")
-            return 0.001  # Fallback seguro
+            return 0.0001  # Fallback seguro
+
+    def formatear_precio_exacto(self, price, tick_size, price_scale):
+        """
+        Formatea un precio para que sea múltiplo exacto del tick size.
+
+        CORRECCIÓN CRÍTICA: Usa Decimal para evitar errores de coma flotante
+        y garantiza que el resultado sea múltiplo exacto del tick.
+
+        Args:
+            price: Precio a formatear
+            tick_size: Tamaño del tick del símbolo
+            price_scale: Número de decimales (priceScale)
+
+        Returns:
+            str: Precio formateado como string
+        """
+        try:
+            from decimal import Decimal, ROUND_DOWN, ROUND_UP
+
+            price_dec = Decimal(str(price))
+            tick_dec = Decimal(str(tick_size))
+
+            # Calcular el número de ticks desde cero
+            num_ticks = price_dec / tick_dec
+
+            # Redondear al tick más cercano
+            num_ticks_rounded = num_ticks.to_integral_value()
+
+            # Calcular el precio exacto
+            precio_exacto = num_ticks_rounded * tick_dec
+
+            # Formatear con exactamente price_scale decimales
+            # Usar string para evitar errores de coma flotante
+            formato = f'{{:.{price_scale}f}}'
+            precio_str = formato.format(precio_exacto)
+
+            # Si el resultado tiene menos decimales que price_scale, agregar ceros
+            if '.' in precio_str:
+                partes = precio_str.split('.')
+                decimales_actuales = len(partes[1])
+                if decimales_actuales < price_scale:
+                    precio_str = partes[0] + '.' + partes[1].ljust(price_scale, '0')
+
+            return precio_str
+
+        except Exception as e:
+            logger.error(f"Error formateando precio exacto: {e}")
+            # Fallback seguro
+            return f"{float(price):.{price_scale}f}"
 
     def place_tpsl_order(self, symbol, hold_side, trigger_price=None, order_type='stop_loss', stop_loss_price=None, take_profit_price=None, trade_direction=None):
         """
         Coloca orden de Stop Loss o Take Profit en Bitget Futuros usando el endpoint place-pos-tpsl.
-        
+
         CORRECCIÓN COMPLETA: Según documentación oficial de Bitget API v2.
         Endpoint: POST /api/v2/mix/order/place-pos-tpsl
-        
+
         Args:
             symbol: Símbolo (ej: 'CRVUSDT')
             hold_side: 'long' o 'short' (para two-way) o 'buy'/'sell' (para one-way)
@@ -475,15 +509,15 @@ class BitgetClient:
             trade_direction: 'LONG' o 'SHORT' para redondeo correcto
         """
         request_path = '/api/v2/mix/order/place-pos-tpsl'
-        
+
         # Determinar la dirección de la operación
         if trade_direction is None:
             trade_direction = 'LONG' if hold_side == 'long' else 'SHORT'
-        
+
         # Obtener precio de marca para calcular trigger
         mark_price = self.get_mark_price(symbol)
         tick_size = self.obtener_tick_size(symbol)
-        
+
         # Construir body con PARÁMETROS CORRECTOS según API Bitget v2
         body = {
             'symbol': symbol,
@@ -491,7 +525,7 @@ class BitgetClient:
             'marginCoin': 'USDT',
             'holdSide': hold_side,
         }
-        
+
         # Si es stop_loss, configurar parámetros de SL
         if order_type == 'stop_loss' and stop_loss_price:
             # Calcular precio de trigger (un tick desde el precio actual)
@@ -499,33 +533,28 @@ class BitgetClient:
                 current_price = float(mark_price)
             else:
                 current_price = float(stop_loss_price)
-            
+
             if trade_direction == 'LONG':
                 # Para LONG, SL se activa cuando precio baja
                 trigger_calc = current_price - tick_size
             else:
                 # Para SHORT, SL se activa cuando precio sube
                 trigger_calc = current_price + tick_size
-            
-            # Redondear según precisión del símbolo
-            symbol_info = self.get_symbol_info(symbol)
-            if symbol_info:
-                price_scale = int(symbol_info.get('priceScale', 4))
-                trigger_price_formatted = round(trigger_calc, price_scale)
-            else:
-                trigger_price_formatted = self.redondear_precio_manual(trigger_calc, 8)
-            
-            # Redondear precio del SL
+
+            # CORRECCIÓN: Usar redondear_precio_manual para formateo exacto
+            trigger_price_formatted = self.redondear_precio_manual(trigger_calc, 8, symbol)
+
+            # Redondear precio del SL usando la función corregida
             sl_formatted = self.redondear_precio_manual(stop_loss_price, 8, symbol, trade_direction)
-            
+
             # AGREGAR PARÁMETROS CORRECTOS PARA SL
             body['stopLossTriggerPrice'] = str(sl_formatted)
             body['stopLossTriggerType'] = 'mark_price'
             # Execution price: 0 = market price execution
             body['stopLossExecutePrice'] = '0'
-            
+
             logger.info(f"🔧 SL para {symbol}: trigger={trigger_price_formatted}, sl_price={sl_formatted}, direccion={trade_direction}")
-        
+
         # Si es take_profit, configurar parámetros de TP
         elif order_type == 'take_profit' and take_profit_price:
             # Calcular precio de trigger
@@ -533,46 +562,41 @@ class BitgetClient:
                 current_price = float(mark_price)
             else:
                 current_price = float(take_profit_price)
-            
+
             if trade_direction == 'LONG':
                 # Para LONG, TP se activa cuando precio sube
                 trigger_calc = current_price + tick_size
             else:
                 # Para SHORT, TP se activa cuando precio baja
                 trigger_calc = current_price - tick_size
-            
-            # Redondear según precisión del símbolo
-            symbol_info = self.get_symbol_info(symbol)
-            if symbol_info:
-                price_scale = int(symbol_info.get('priceScale', 4))
-                trigger_price_formatted = round(trigger_calc, price_scale)
-            else:
-                trigger_price_formatted = self.redondear_precio_manual(trigger_calc, 8)
-            
-            # Redondear precio del TP
+
+            # CORRECCIÓN: Usar redondear_precio_manual para formateo exacto
+            trigger_price_formatted = self.redondear_precio_manual(trigger_calc, 8, symbol)
+
+            # Redondear precio del TP usando la función corregida
             tp_formatted = self.redondear_precio_manual(take_profit_price, 8, symbol)
-            
+
             # AGREGAR PARÁMETROS CORRECTOS PARA TP
             body['stopSurplusTriggerPrice'] = str(tp_formatted)
             body['stopSurplusTriggerType'] = 'mark_price'
             # Execution price: 0 = market price execution
             body['stopSurplusExecutePrice'] = '0'
-            
+
             logger.info(f"🔧 TP para {symbol}: trigger={trigger_price_formatted}, tp_price={tp_formatted}, direccion={trade_direction}")
-        
+
         # Enviar solicitud
         body_json = json.dumps(body, separators=(',', ':'), ensure_ascii=False)
         headers = self._get_headers('POST', request_path, body_json)
-        
+
         logger.info(f"📤 Enviando orden {order_type} para {symbol}: {body}")
-        
+
         response = requests.post(
             self.base_url + request_path,
             headers=headers,
             data=body_json,
             timeout=10
         )
-        
+
         logger.info(f"📤 Respuesta TP/SL BITGET: {response.status_code} - {response.text}")
         
         if response.status_code == 200:
@@ -863,89 +887,101 @@ class BitgetClient:
     def redondear_precio_manual(self, price, precision, symbol=None, trade_direction=None):
         """
         Redondea el precio con una precisión específica, asegurando que sea un múltiplo válido.
-        
-        CORRECCIÓN CRÍTICA: Ahora usa obtener_tick_size() en lugar de calcular el tick
-        directamente desde priceScale, lo cual evita el error 45115 de Bitget.
-        
+
+        CORRECCIÓN COMPLETA: Usa cálculos con Decimal para evitar errores de coma flotante
+        y garantiza que el resultado sea múltiplo exacto del tick size del exchange.
+
         Para Stop Loss:
         - LONG: El SL debe redondearse hacia ABAJO (menor que el precio de entrada)
         - SHORT: El SL debe redondearse hacia ARRIBA (mayor que el precio de entrada)
-        
+
         Args:
             price: Precio a redondear
             precision: Número de decimales (usado solo como fallback)
             symbol: Símbolo opcional para obtener priceStep real del exchange
             trade_direction: 'LONG', 'SHORT' o None (solo afecta el redondeo del SL)
-        
+
         Returns:
             str: Precio redondeado como string (nunca cero si el precio original > 0)
         """
         try:
-            price = float(price)
-            if price == 0:
+            from decimal import Decimal, ROUND_DOWN, ROUND_UP
+
+            price_dec = Decimal(str(price))
+            if price_dec == Decimal('0'):
                 return "0.0"
-            
-            # CORRECCIÓN CRÍTICA: Usar obtener_tick_size() en lugar de calcular manualmente
+
             if symbol:
                 # Obtener el tick size correcto del exchange
                 tick_size = self.obtener_tick_size(symbol)
-                
+                tick_dec = Decimal(str(tick_size))
+
                 # Obtener el priceScale para formateo
                 symbol_info = self.get_symbol_info(symbol)
                 if symbol_info:
                     price_scale = int(symbol_info.get('priceScale', 4))
                 else:
                     # Calcular price_scale desde tick_size
-                    import math
-                    price_scale = int(abs(math.log10(tick_size)))
-                
-                # Redondear matemáticamente al múltiplo más cercano del tick_size
-                precio_redondeado = round(price / tick_size) * tick_size
-                
-                # AJUSTE INTELIGENTE PARA STOP LOSS
-                # El SL para LONG debe estar POR DEBAJO del precio de entrada
-                # El SL para SHORT debe estar POR ENCIMA del precio de entrada
-                # IMPORTANTE: Usar floor/ceil en lugar de round para evitar bankers rounding
-                import math
+                    price_scale = int(abs(float(tick_dec.to_exponential().split('e')[1])))
+
+                # Calcular el número de ticks desde cero
+                num_ticks = price_dec / tick_dec
+
+                # Redondeo base al múltiplo más cercano
                 if trade_direction and trade_direction in ['LONG', 'SHORT']:
-                    precio_redondeado = float(f"{precio_redondeado:.{price_scale}f}")
-                    
+                    # Para SL, usar floor/ceil según la dirección
                     if trade_direction == 'LONG':
                         # Para LONG: SL debe ser menor que precio de entrada
-                        # Redondear hacia ABAJO usando floor
-                        if precio_redondeado >= price:
-                            # Ir al tick anterior (menor)
-                            precio_redondeado = math.floor(price / tick_size) * tick_size
-                    elif trade_direction == 'SHORT':
+                        # Redondear hacia ABAJO
+                        num_ticks_rounded = num_ticks.to_integral_value(rounding=ROUND_DOWN)
+                    else:  # SHORT
                         # Para SHORT: SL debe ser mayor que precio de entrada
-                        # Redondear hacia ARRIBA usando ceil
-                        if precio_redondeado <= price:
-                            # Ir al siguiente tick (mayor)
-                            precio_redondeado = math.ceil(price / tick_size) * tick_size
-                
-                # Usar formato para evitar errores de punto flotante
-                precio_formateado = f"{precio_redondeado:.{price_scale}f}"
-                
+                        # Redondear hacia ARRIBA
+                        num_ticks_rounded = num_ticks.to_integral_value(rounding=ROUND_UP)
+
+                    # Si el resultado está en la dirección correcta
+                    precio_redondeado = num_ticks_rounded * tick_dec
+
+                    if trade_direction == 'LONG':
+                        if precio_redondeado >= price_dec:
+                            # Ir al tick anterior
+                            num_ticks_rounded = num_ticks.to_integral_value(rounding=ROUND_DOWN) - 1
+                            precio_redondeado = num_ticks_rounded * tick_dec
+                    else:  # SHORT
+                        if precio_redondeado <= price_dec:
+                            # Ir al siguiente tick
+                            num_ticks_rounded = num_ticks.to_integral_value(rounding=ROUND_UP) + 1
+                            precio_redondeado = num_ticks_rounded * tick_dec
+                else:
+                    # Para TP o sin dirección específica, redondear al más cercano
+                    num_ticks_rounded = num_ticks.to_integral_value()
+                    precio_redondeado = num_ticks_rounded * tick_dec
+
                 # Verificar que no sea cero
-                if float(precio_formateado) == 0.0 and price > 0:
-                    # Si se redondeó a cero, usar más decimales
-                    nueva_scale = price_scale + 4
-                    tick_size = 10 ** (-nueva_scale)
-                    precio_redondeado = round(price / tick_size) * tick_size
-                    precio_formateado = f"{precio_redondeado:.{nueva_scale}f}"
-                
+                if precio_redondeado == Decimal('0') and price_dec > Decimal('0'):
+                    # Usar más decimales
+                    nueva_price_scale = price_scale + 4
+                    nuevo_tick = Decimal(str(1 / (10 ** nueva_price_scale)))
+                    num_ticks = price_dec / nuevo_tick
+                    num_ticks_rounded = num_ticks.to_integral_value()
+                    precio_redondeado = num_ticks_rounded * nuevo_tick
+                    price_scale = nueva_price_scale
+
+                # Formatear con exactamente price_scale decimales usando la nueva función
+                precio_formateado = self.formatear_precio_exacto(float(precio_redondeado), float(tick_size), price_scale)
+
                 logger.info(f"🔢 {symbol}: precio={price}, priceScale={price_scale}, tick={tick_size}, resultado={precio_formateado}, direccion={trade_direction}")
                 return precio_formateado
-            
-            # Fallback: usar la precisión proporcionada
+
+            # Fallback: usar la precisión proporcionada sin símbolo
             tick_size = 10 ** (-precision)
             precio_redondeado = round(price / tick_size) * tick_size
             precio_formateado = f"{precio_redondeado:.{precision}f}"
-            
+
             if float(precio_formateado) == 0.0 and price > 0:
                 nueva_precision = precision + 4
                 return self.redondear_precio_manual(price, nueva_precision, symbol)
-            
+
             return precio_formateado
         except Exception as e:
             logger.error(f"Error redondeando precio manualmente: {e}")
