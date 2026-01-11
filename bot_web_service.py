@@ -29,30 +29,6 @@ import logging
 logging.basicConfig(level=logging.INFO, stream=sys.stdout, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-# Configurar fuentes compatibles con Unicode y emojis para matplotlib
-# CORRECCIÓN: Usar fuentes más seguras que estén disponibles en la mayoría de servidores
-try:
-    # Lista de fuentes ordenadas por disponibilidad en servidores Linux
-    fuentes_seguras = [
-        'DejaVu Sans',           # Estándar en Linux, mejor compatibilidad básica
-        'Noto Sans CJK SC',      # Chino simplificado
-        'WenQuanYi Zen Hei',     # Chino tradicional
-        'Arial Unicode MS',      # Unicode genérico de Microsoft
-        'Liberation Sans',       # Alternativa a Arial en Linux
-        'FreeSans',              # Fuente libre GNU
-    ]
-    plt.rcParams['font.sans-serif'] = fuentes_seguras
-    plt.rcParams['axes.unicode_minus'] = False
-    plt.rcParams['font.family'] = 'sans-serif'
-    
-    # Deshabilitar el uso de fuentes emoji en matplotlib para evitar warnings
-    # Los glypos de emoji no son críticos para los gráficos de trading
-    import warnings
-    warnings.filterwarnings('ignore', category=UserWarning, module='matplotlib')
-    
-except Exception as e:
-    logger.warning(f"⚠️ Error configurando fuentes: {e}")
-
 # ---------------------------
 # [INICIO DEL CÓDIGO DEL BOT NUEVO]
 # Copiado íntegro y corregido para ejecución local
@@ -371,21 +347,121 @@ class BitgetClient:
             logger.error(f"Error obteniendo leverage máximo para {symbol}: {e}")
             return 20  # Fallback seguro
 
-    def get_mark_price(self, symbol):
+    def place_tpsl_order(self, symbol, hold_side, trigger_price, order_type='stop_loss', stop_loss_price=None, take_profit_price=None, trade_direction=None):
         """
-        Obtiene el precio de marca (mark price) actual para un símbolo.
+        Coloca orden de Stop Loss o Take Profit en Bitget Futuros para posición existente
         
         Args:
-            symbol: Símbolo de trading (ej: 'BTCUSDT')
+            symbol: Símbolo (ej: 'CRVUSDT')
+            hold_side: 'long' o 'short'
+            trigger_price: Precio de activación (usado como precio de SL/TP)
+            order_type: 'stop_loss' o 'take_profit'
+            stop_loss_price: Precio de stop loss (opcional)
+            take_profit_price: Precio de take profit (opcional)
+            trade_direction: 'LONG' o 'SHORT' para redondeo correcto del SL
+        """
+        request_path = '/api/v2/mix/order/place-pos-tpsl'
+        
+        # Determinar la dirección de la operación si no se proporciona
+        if trade_direction is None:
+            trade_direction = 'LONG' if hold_side == 'long' else 'SHORT'
+        
+        # CORRECCIÓN ERROR 45115: Obtener la precisión correcta dinámicamente para cada símbolo
+        # Bitget requiere que los precios sean múltiplos del priceStep específico de cada símbolo
+        symbol_info = self.get_symbol_info(symbol)
+        if symbol_info:
+            # priceScale indica los decimales requeridos para este símbolo
+            price_scale = symbol_info.get('priceScale', 4)
+            logger.info(f"📋 {symbol}: priceScale = {price_scale} (decimales requeridos)")
+            precision_bitget = price_scale
+        else:
+            # Fallback: usar 4 decimales si no se puede obtener info del símbolo
+            logger.warning(f"⚠️ No se pudo obtener info de {symbol}, usando 4 decimales por defecto")
+            precision_bitget = 4
+        
+        # Body correcto según documentación Bitget API v2
+        # IMPORTANTE: NO incluir delegateType, orderType, triggerType, triggerPrice
+        # Estos parámetros no existen en el endpoint /api/v2/mix/order/place-pos-tpsl
+        body = {
+            'symbol': symbol,
+            'productType': 'USDT-FUTURES',
+            'marginCoin': 'USDT',
+            'holdSide': hold_side,
+            # Estos parámetros SÍ son requeridos según documentación Bitget
+            'stopLossTriggerType': 'mark_price',
+            'stopSurplusTriggerType': 'mark_price'
+        }
+        
+        # Usar la precisión correcta para precios de SL/TP en Bitget
+        if order_type == 'stop_loss' and stop_loss_price:
+            # Pasar la dirección para redondeo correcto del SL
+            stop_loss_formatted = self.redondear_precio_manual(stop_loss_price, precision_bitget, symbol, trade_direction)
+            body['stopLossTriggerPrice'] = stop_loss_formatted
+            logger.info(f"🔧 SL para {symbol}: precio={stop_loss_price}, precision={precision_bitget}, formatted={stop_loss_formatted}, direccion={trade_direction}")
+        elif order_type == 'take_profit' and take_profit_price:
+            take_profit_formatted = self.redondear_precio_manual(take_profit_price, precision_bitget, symbol)
+            body['stopSurplusTriggerPrice'] = take_profit_formatted
+            logger.info(f"🔧 TP para {symbol}: precio={take_profit_price}, precision={precision_bitget}, formatted={take_profit_formatted}")
+        
+        body_json = json.dumps(body, separators=(',', ':'), ensure_ascii=False)
+        headers = self._get_headers('POST', request_path, body_json)
+        
+        logger.info(f"📤 Enviando orden {order_type} para {symbol}: {body}")
+        
+        response = requests.post(
+            self.base_url + request_path,
+            headers=headers,
+            data=body_json,
+            timeout=10
+        )
+        
+        logger.info(f"📤 Respuesta TP/SL BITGET: {response.status_code} - {response.text}")
+        
+        if response.status_code == 200:
+            data = response.json()
+            if data.get('code') == '00000':
+                logger.info(f"✅ {order_type.upper()} creado correctamente para {symbol}")
+                return data.get('data')
+            else:
+                # Error 40017: parámetros incorrectos
+                if data.get('code') == '40017':
+                    logger.error(f"❌ Error 40017 en {order_type}: {data.get('msg')}")
+                    logger.error(f"💡 Body enviado: {body}")
+                # Error 40034: faltan parámetros de tipo
+                if data.get('code') == '40034':
+                    logger.error(f"❌ Error 40034 en {order_type}: {data.get('msg')}")
+                    logger.error(f"💡 Body enviado: {body}")
+        
+        logger.error(f"❌ Error creando {order_type}: {response.text}")
+        return None
+
+    def place_plan_order(self, symbol, hold_side, trigger_price, plan_type):
+        """
+        Método legacy - ya no usar. Usar place_tpsl_order en su lugar.
+        """
+        # Este método está obsoleto, usar place_tpsl_order
+        logger.warning("⚠️ place_plan_order está obsoleto, usando place_tpsl_order")
+        return None
+
+    def get_order_status(self, order_id, symbol):
+        """
+        Verificar el estado de una orden específica en Bitget
+        
+        Args:
+            order_id: ID de la orden a verificar
+            symbol: Símbolo de la orden
         
         Returns:
-            str: Mark price como string, o None si hay error
+            dict: Información del estado de la orden o None si hay error
         """
         try:
-            request_path = '/api/v2/mix/market/tickers'
-            params = {'symbol': symbol}
+            request_path = '/api/v2/mix/order/detail'
+            params = {'orderId': order_id, 'symbol': symbol, 'productType': 'USDT-FUTURES'}
             
-            query_string = f"?symbol={symbol}"
+            query_parts = []
+            for key, value in params.items():
+                query_parts.append(f"{key}={value}")
+            query_string = "?" + "&".join(query_parts) if query_parts else ""
             full_request_path = request_path + query_string
             
             headers = self._get_headers('GET', full_request_path, '')
@@ -400,223 +476,39 @@ class BitgetClient:
             if response.status_code == 200:
                 data = response.json()
                 if data.get('code') == '00000':
-                    tickers = data.get('data', [])
-                    if tickers:
-                        mark_price = tickers[0].get('markPrice')
-                        if mark_price:
-                            logger.info(f"📊 {symbol}: Mark Price = {mark_price}")
-                            return mark_price
+                    return data.get('data')
+                else:
+                    logger.warning(f"⚠️ Error consultando orden {order_id}: {data.get('msg')}")
             
             return None
+            
         except Exception as e:
-            logger.error(f"Error obteniendo mark price para {symbol}: {e}")
+            logger.error(f"❌ Error verificando estado de orden {order_id}: {e}")
             return None
 
-    def obtener_tick_size(self, symbol):
+    def verificar_orden_activa(self, order_id, symbol):
         """
-        Calcula el tamaño del tick (mínimo movimiento de precio) para un símbolo.
-
-        CORRECCIÓN COMPLETA: El tick size se calcula EXACTAMENTE desde priceScale
-        sin ajustes artificiales. Para Bitget, el tick es 1 / (10^priceScale).
-
-        Args:
-            symbol: Símbolo de trading
-
-        Returns:
-            float: Tamaño del tick exacto
-        """
-        try:
-            symbol_info = self.get_symbol_info(symbol)
-            if symbol_info:
-                price_scale = int(symbol_info.get('priceScale', 4))
-                # El tick es exactamente 1 en la escala de precio del exchange
-                # NO ajustar a "valores estándar" - usar el cálculo exacto
-                tick = 1 / (10 ** price_scale)
-
-                logger.info(f"📊 {symbol}: Tick size = {tick} (priceScale={price_scale})")
-                return tick
-
-            # Fallback para símbolos desconocidos
-            return 0.0001  # Tick por defecto más común
-
-        except Exception as e:
-            logger.error(f"Error calculando tick size para {symbol}: {e}")
-            return 0.0001  # Fallback seguro
-
-    def formatear_precio_exacto(self, price, tick_size, price_scale):
-        """
-        Formatea un precio para que sea múltiplo exacto del tick size.
-
-        CORRECCIÓN CRÍTICA: Usa Decimal para evitar errores de coma flotante
-        y garantiza que el resultado sea múltiplo exacto del tick.
-
-        Args:
-            price: Precio a formatear
-            tick_size: Tamaño del tick del símbolo
-            price_scale: Número de decimales (priceScale)
-
-        Returns:
-            str: Precio formateado como string
-        """
-        try:
-            from decimal import Decimal, ROUND_DOWN, ROUND_UP
-
-            price_dec = Decimal(str(price))
-            tick_dec = Decimal(str(tick_size))
-
-            # Calcular el número de ticks desde cero
-            num_ticks = price_dec / tick_dec
-
-            # Redondear al tick más cercano
-            num_ticks_rounded = num_ticks.to_integral_value()
-
-            # Calcular el precio exacto
-            precio_exacto = num_ticks_rounded * tick_dec
-
-            # Formatear con exactamente price_scale decimales
-            # Usar string para evitar errores de coma flotante
-            formato = f'{{:.{price_scale}f}}'
-            precio_str = formato.format(precio_exacto)
-
-            # Si el resultado tiene menos decimales que price_scale, agregar ceros
-            if '.' in precio_str:
-                partes = precio_str.split('.')
-                decimales_actuales = len(partes[1])
-                if decimales_actuales < price_scale:
-                    precio_str = partes[0] + '.' + partes[1].ljust(price_scale, '0')
-
-            return precio_str
-
-        except Exception as e:
-            logger.error(f"Error formateando precio exacto: {e}")
-            # Fallback seguro
-            return f"{float(price):.{price_scale}f}"
-
-    def place_tpsl_order(self, symbol, hold_side, trigger_price=None, order_type='stop_loss', stop_loss_price=None, take_profit_price=None, trade_direction=None):
-        """
-        Coloca orden de Stop Loss o Take Profit en Bitget Futuros usando el endpoint place-pos-tpsl.
-
-        CORRECCIÓN COMPLETA: Según documentación oficial de Bitget API v2.
-        Endpoint: POST /api/v2/mix/order/place-pos-tpsl
-
-        Args:
-            symbol: Símbolo (ej: 'CRVUSDT')
-            hold_side: 'long' o 'short' (para two-way) o 'buy'/'sell' (para one-way)
-            trigger_price: PRECIO DE ACTIVACIÓN (trigger)
-            order_type: 'stop_loss' o 'take_profit'
-            stop_loss_price: Precio de stop loss (para SL)
-            take_profit_price: Precio de take profit (para TP)
-            trade_direction: 'LONG' o 'SHORT' para redondeo correcto
-        """
-        request_path = '/api/v2/mix/order/place-pos-tpsl'
-
-        # Determinar la dirección de la operación
-        if trade_direction is None:
-            trade_direction = 'LONG' if hold_side == 'long' else 'SHORT'
-
-        # Obtener precio de marca para calcular trigger
-        mark_price = self.get_mark_price(symbol)
-        tick_size = self.obtener_tick_size(symbol)
-
-        # Construir body con PARÁMETROS CORRECTOS según API Bitget v2
-        body = {
-            'symbol': symbol,
-            'productType': 'USDT-FUTURES',
-            'marginCoin': 'USDT',
-            'holdSide': hold_side,
-        }
-
-        # Si es stop_loss, configurar parámetros de SL
-        if order_type == 'stop_loss' and stop_loss_price:
-            # Calcular precio de trigger (un tick desde el precio actual)
-            if mark_price:
-                current_price = float(mark_price)
-            else:
-                current_price = float(stop_loss_price)
-
-            if trade_direction == 'LONG':
-                # Para LONG, SL se activa cuando precio baja
-                trigger_calc = current_price - tick_size
-            else:
-                # Para SHORT, SL se activa cuando precio sube
-                trigger_calc = current_price + tick_size
-
-            # CORRECCIÓN: Usar redondear_precio_manual para formateo exacto
-            trigger_price_formatted = self.redondear_precio_manual(trigger_calc, 8, symbol)
-
-            # Redondear precio del SL usando la función corregida
-            sl_formatted = self.redondear_precio_manual(stop_loss_price, 8, symbol, trade_direction)
-
-            # AGREGAR PARÁMETROS CORRECTOS PARA SL
-            body['stopLossTriggerPrice'] = str(sl_formatted)
-            body['stopLossTriggerType'] = 'mark_price'
-            # Execution price: 0 = market price execution
-            body['stopLossExecutePrice'] = '0'
-
-            logger.info(f"🔧 SL para {symbol}: trigger={trigger_price_formatted}, sl_price={sl_formatted}, direccion={trade_direction}")
-
-        # Si es take_profit, configurar parámetros de TP
-        elif order_type == 'take_profit' and take_profit_price:
-            # Calcular precio de trigger
-            if mark_price:
-                current_price = float(mark_price)
-            else:
-                current_price = float(take_profit_price)
-
-            if trade_direction == 'LONG':
-                # Para LONG, TP se activa cuando precio sube
-                trigger_calc = current_price + tick_size
-            else:
-                # Para SHORT, TP se activa cuando precio baja
-                trigger_calc = current_price - tick_size
-
-            # CORRECCIÓN: Usar redondear_precio_manual para formateo exacto
-            trigger_price_formatted = self.redondear_precio_manual(trigger_calc, 8, symbol)
-
-            # Redondear precio del TP usando la función corregida
-            tp_formatted = self.redondear_precio_manual(take_profit_price, 8, symbol)
-
-            # AGREGAR PARÁMETROS CORRECTOS PARA TP
-            body['stopSurplusTriggerPrice'] = str(tp_formatted)
-            body['stopSurplusTriggerType'] = 'mark_price'
-            # Execution price: 0 = market price execution
-            body['stopSurplusExecutePrice'] = '0'
-
-            logger.info(f"🔧 TP para {symbol}: trigger={trigger_price_formatted}, tp_price={tp_formatted}, direccion={trade_direction}")
-
-        # Enviar solicitud
-        body_json = json.dumps(body, separators=(',', ':'), ensure_ascii=False)
-        headers = self._get_headers('POST', request_path, body_json)
-
-        logger.info(f"📤 Enviando orden {order_type} para {symbol}: {body}")
-
-        response = requests.post(
-            self.base_url + request_path,
-            headers=headers,
-            data=body_json,
-            timeout=10
-        )
-
-        logger.info(f"📤 Respuesta TP/SL BITGET: {response.status_code} - {response.text}")
+        Verificar si una orden TP/SL sigue activa (no ejecutada ni cancelada)
         
-        if response.status_code == 200:
-            data = response.json()
-            if data.get('code') == '00000':
-                logger.info(f"✅ {order_type.upper()} creado correctamente para {symbol}")
-                return data.get('data')
-            else:
-                logger.error(f"❌ Error en {order_type}: {data.get('msg')} (código: {data.get('code')})")
+        Args:
+            order_id: ID de la orden
+            symbol: Símbolo de la orden
         
-        logger.error(f"❌ Error creando {order_type}: {response.text}")
-        return None
-
-    def place_plan_order(self, symbol, hold_side, trigger_price, plan_type):
+        Returns:
+            bool: True si la orden está activa, False si no
         """
-        Método legacy - ya no usar. Usar place_tpsl_order en su lugar.
-        """
-        # Este método está obsoleto, usar place_tpsl_order
-        logger.warning("⚠️ place_plan_order está obsoleto, usando place_tpsl_order")
-        return None
+        if not order_id:
+            return False
+        
+        orden = self.get_order_status(order_id, symbol)
+        if orden:
+            estado = orden.get('status', '')
+            # Estados activos en Bitget: 'alive', 'effective', 'not_trigger'
+            estados_activos = ['alive', 'effective', 'not_trigger', '1', '2']
+            if estado in estados_activos:
+                return True
+        
+        return False
 
     def get_position_mode(self, symbol, product_type='USDT-FUTURES'):
         """
@@ -727,20 +619,28 @@ class BitgetClient:
             elif side == 'sell':
                 trade_direction = 'SHORT'
         
-        # Obtener precisión adaptativa para precios TP/SL
+        # CORRECCIÓN ERROR 45115: Obtener la precisión correcta dinámicamente para cada símbolo
+        # Bitget requiere que los precios sean múltiplos del priceStep específico de cada símbolo
+        symbol_info = self.get_symbol_info(symbol)
+        if symbol_info:
+            # priceScale indica los decimales requeridos para este símbolo
+            price_scale = symbol_info.get('priceScale', 4)
+            logger.info(f"📋 {symbol}: priceScale = {price_scale} (decimales requeridos)")
+            precision_bitget = price_scale
+        else:
+            # Fallback: usar 4 decimales si no se puede obtener info del símbolo
+            logger.warning(f"⚠️ No se pudo obtener info de {symbol}, usando 4 decimales por defecto")
+            precision_bitget = 4
+        
         if stop_loss_price is not None:
-            # Usar precision adaptativa para evitar redondeo a cero en memecoins
-            precision_sl = self.obtener_precision_adaptada(float(stop_loss_price), symbol)
-            # Redondear pasando el símbolo y la dirección para SL correcto
-            # Para LONG: SL debe ser menor (redondear hacia abajo)
-            # Para SHORT: SL debe ser mayor (redondear hacia arriba)
-            stop_loss_formatted = self.redondear_precio_manual(float(stop_loss_price), precision_sl, symbol, trade_direction)
+            # Redondear con la precisión correcta para este símbolo
+            stop_loss_formatted = self.redondear_precio_manual(float(stop_loss_price), precision_bitget, symbol, trade_direction)
         else:
             stop_loss_formatted = None
             
         if take_profit_price is not None:
-            precision_tp = self.obtener_precision_adaptada(float(take_profit_price), symbol)
-            take_profit_formatted = self.redondear_precio_manual(float(take_profit_price), precision_tp, symbol)
+            # Redondear con la precisión correcta para este símbolo
+            take_profit_formatted = self.redondear_precio_manual(float(take_profit_price), precision_bitget, symbol)
         else:
             take_profit_formatted = None
 
@@ -886,103 +786,83 @@ class BitgetClient:
 
     def redondear_precio_manual(self, price, precision, symbol=None, trade_direction=None):
         """
-        Redondea el precio con una precisión específica, asegurando que sea un múltiplo válido.
-
-        CORRECCIÓN COMPLETA: Usa cálculos con Decimal para evitar errores de coma flotante
-        y garantiza que el resultado sea múltiplo exacto del tick size del exchange.
-
+        Redondea el precio con la precisión correcta según el símbolo en Bitget.
+        IMPORTANTE: Para la API de Bitget, el precio debe ser un múltiplo del priceStep.
+        
         Para Stop Loss:
         - LONG: El SL debe redondearse hacia ABAJO (menor que el precio de entrada)
         - SHORT: El SL debe redondearse hacia ARRIBA (mayor que el precio de entrada)
-
+        
         Args:
             price: Precio a redondear
-            precision: Número de decimales (usado solo como fallback)
-            symbol: Símbolo opcional para obtener priceStep real del exchange
+            precision: Número de decimales (obtenido del priceScale del símbolo)
+            symbol: Símbolo para obtener priceStep real del exchange
             trade_direction: 'LONG', 'SHORT' o None (solo afecta el redondeo del SL)
-
+        
         Returns:
             str: Precio redondeado como string (nunca cero si el precio original > 0)
         """
         try:
-            from decimal import Decimal, ROUND_DOWN, ROUND_UP
-
-            price_dec = Decimal(str(price))
-            if price_dec == Decimal('0'):
+            price = float(price)
+            if price == 0:
                 return "0.0"
-
+            
+            # Determinar el tick_size basándose en el símbolo o en la precisión proporcionada
             if symbol:
-                # Obtener el tick size correcto del exchange
-                tick_size = self.obtener_tick_size(symbol)
-                tick_dec = Decimal(str(tick_size))
-
-                # Obtener el priceScale para formateo
                 symbol_info = self.get_symbol_info(symbol)
                 if symbol_info:
-                    price_scale = int(symbol_info.get('priceScale', 4))
+                    # priceScale indica los decimales requeridos para este símbolo
+                    price_scale = symbol_info.get('priceScale', precision)
+                    logger.info(f"📋 {symbol}: Usando priceScale = {price_scale} para redondeo")
                 else:
-                    # Calcular price_scale desde tick_size
-                    price_scale = int(abs(float(tick_dec.to_exponential().split('e')[1])))
-
-                # Calcular el número de ticks desde cero
-                num_ticks = price_dec / tick_dec
-
-                # Redondeo base al múltiplo más cercano
-                if trade_direction and trade_direction in ['LONG', 'SHORT']:
-                    # Para SL, usar floor/ceil según la dirección
-                    if trade_direction == 'LONG':
-                        # Para LONG: SL debe ser menor que precio de entrada
-                        # Redondear hacia ABAJO
-                        num_ticks_rounded = num_ticks.to_integral_value(rounding=ROUND_DOWN)
-                    else:  # SHORT
-                        # Para SHORT: SL debe ser mayor que precio de entrada
-                        # Redondear hacia ARRIBA
-                        num_ticks_rounded = num_ticks.to_integral_value(rounding=ROUND_UP)
-
-                    # Si el resultado está en la dirección correcta
-                    precio_redondeado = num_ticks_rounded * tick_dec
-
-                    if trade_direction == 'LONG':
-                        if precio_redondeado >= price_dec:
-                            # Ir al tick anterior
-                            num_ticks_rounded = num_ticks.to_integral_value(rounding=ROUND_DOWN) - 1
-                            precio_redondeado = num_ticks_rounded * tick_dec
-                    else:  # SHORT
-                        if precio_redondeado <= price_dec:
-                            # Ir al siguiente tick
-                            num_ticks_rounded = num_ticks.to_integral_value(rounding=ROUND_UP) + 1
-                            precio_redondeado = num_ticks_rounded * tick_dec
-                else:
-                    # Para TP o sin dirección específica, redondear al más cercano
-                    num_ticks_rounded = num_ticks.to_integral_value()
-                    precio_redondeado = num_ticks_rounded * tick_dec
-
-                # Verificar que no sea cero
-                if precio_redondeado == Decimal('0') and price_dec > Decimal('0'):
-                    # Usar más decimales
-                    nueva_price_scale = price_scale + 4
-                    nuevo_tick = Decimal(str(1 / (10 ** nueva_price_scale)))
-                    num_ticks = price_dec / nuevo_tick
-                    num_ticks_rounded = num_ticks.to_integral_value()
-                    precio_redondeado = num_ticks_rounded * nuevo_tick
-                    price_scale = nueva_price_scale
-
-                # Formatear con exactamente price_scale decimales usando la nueva función
-                precio_formateado = self.formatear_precio_exacto(float(precio_redondeado), float(tick_size), price_scale)
-
-                logger.info(f"🔢 {symbol}: precio={price}, priceScale={price_scale}, tick={tick_size}, resultado={precio_formateado}, direccion={trade_direction}")
-                return precio_formateado
-
-            # Fallback: usar la precisión proporcionada sin símbolo
-            tick_size = 10 ** (-precision)
+                    # Si no se puede obtener info, usar la precisión proporcionada
+                    price_scale = precision
+                    logger.warning(f"⚠️ No se pudo obtener info de {symbol}, usando precision={precision}")
+            else:
+                # Si no hay símbolo, usar la precisión proporcionada
+                price_scale = precision
+            
+            # Calcular el tick_size basado en price_scale
+            tick_size = 10 ** (-price_scale)
+            
+            # Redondear matemáticamente al múltiplo más cercano del tick_size
             precio_redondeado = round(price / tick_size) * tick_size
-            precio_formateado = f"{precio_redondeado:.{precision}f}"
-
+            
+            # AJUSTE INTELIGENTE PARA STOP LOSS
+            # El SL para LONG debe estar POR DEBAJO del precio de entrada
+            # El SL para SHORT debe estar POR ENCIMA del precio de entrada
+            import math
+            if trade_direction and trade_direction in ['LONG', 'SHORT']:
+                precio_redondeado = float(f"{precio_redondeado:.{price_scale}f}")
+                
+                if trade_direction == 'LONG':
+                    # Para LONG: SL debe ser menor que precio de entrada
+                    # Redondear hacia ABAJO usando floor
+                    if precio_redondeado >= price:
+                        # Ir al tick anterior (menor)
+                        precio_redondeado = math.floor(price / tick_size) * tick_size
+                elif trade_direction == 'SHORT':
+                    # Para SHORT: SL debe ser mayor que precio de entrada
+                    # Redondear hacia ARRIBA usando ceil
+                    if precio_redondeado <= price:
+                        # Ir al siguiente tick (mayor)
+                        precio_redondeado = math.ceil(price / tick_size) * tick_size
+            
+            # Usar formato para evitar errores de punto flotante
+            precio_formateado = f"{precio_redondeado:.{price_scale}f}"
+            
+            # Verificar que no sea cero
             if float(precio_formateado) == 0.0 and price > 0:
-                nueva_precision = precision + 4
-                return self.redondear_precio_manual(price, nueva_precision, symbol)
-
+                # Si se redondeó a cero, usar más decimales
+                nueva_scale = price_scale + 4
+                tick_size = 10 ** (-nueva_scale)
+                precio_redondeado = round(price / tick_size) * tick_size
+                precio_formateado = f"{precio_redondeado:.{nueva_scale}f}"
+                logger.warning(f"⚠️ {symbol}: Precio redondeado a cero, usando {nueva_scale} decimales")
+            
+            logger.info(f"🔢 {symbol if symbol else 'N/A'}: precio={price}, priceScale={price_scale}, tick={tick_size}, resultado={precio_formateado}, direccion={trade_direction}")
             return precio_formateado
+            
         except Exception as e:
             logger.error(f"Error redondeando precio manualmente: {e}")
             return str(price)
@@ -1000,19 +880,12 @@ class BitgetClient:
             float: Precio redondeado al priceStep del símbolo
         """
         try:
-            # Usar obtener_tick_size() que ya tiene los ajustes correctos
-            tick_size = self.obtener_tick_size(symbol)
+            # Obtener la precisión del símbolo
+            precision = self.obtener_precision_precio(symbol)
+            price_step = 10 ** (-precision)
             
-            # Redondear al múltiplo más cercano del tick_size
-            precio_redondeado = round(price / tick_size) * tick_size
-            
-            # Obtener precision para formateo
-            symbol_info = self.get_symbol_info(symbol)
-            if symbol_info:
-                precision = int(symbol_info.get('priceScale', 4))
-            else:
-                import math
-                precision = int(abs(math.log10(tick_size)))
+            # Redondear al múltiplo más cercano del priceStep
+            precio_redondeado = round(price / price_step) * price_step
             
             # Formatear para eliminar errores de punto flotante
             return float(f"{precio_redondeado:.{precision}f}")
@@ -1442,17 +1315,18 @@ def ejecutar_operacion_bitget(bitget_client, simbolo, tipo_operacion, capital_us
             stop_loss = precio_actual * (1 + sl_porcentaje)
             take_profit = precio_actual * (1 - tp_porcentaje)
         
-        # Formatear precios según la precisión del símbolo
+        # Formatear precios según la precisión del símbolo - CORRECCIÓN ERROR 45115
+        # Bitget requiere múltiplos de 0.001 para presetStopLossPrice y presetStopSurplusPrice
         def formatear_precio(price):
-            """Formatear precio con precisión apropiada para Bitget"""
+            """Formatear precio con precisión apropiada para Bitget (máximo 3 decimales)"""
             if price >= 1:
-                return f"{price:.4f}"
+                return f"{price:.3f}"  # 3 decimales para Bitget (múltiplo de 0.001)
             elif price >= 0.1:
-                return f"{price:.5f}"
+                return f"{price:.4f}"  # 4 decimales
             elif price >= 0.01:
-                return f"{price:.6f}"
+                return f"{price:.5f}"  # 5 decimales
             elif price >= 0.001:
-                return f"{price:.7f}"
+                return f"{price:.6f}"  # 6 decimales
             else:
                 # Para precios muy pequeños como PEPE
                 return f"{price:.8f}".rstrip('0').rstrip('.')
@@ -1996,6 +1870,47 @@ class TradingBot:
         except Exception as e:
             logger.error(f"Error en limpieza inicial: {e}")
 
+    def liberar_simbolo(self, simbolo):
+        """
+        Liberar un símbolo que ya no tiene posición activa en Bitget.
+        Esto permite que el bot pueda generar nuevas señales para este símbolo.
+        
+        Args:
+            simbolo: Símbolo a liberar (ej: 'BTCUSDT')
+        """
+        try:
+            logger.info(f"🆓 Liberando símbolo {simbolo}...")
+            
+            # Eliminar de operaciones activas
+            if simbolo in self.operaciones_bitget_activas:
+                del self.operaciones_bitget_activas[simbolo]
+                logger.info(f"   ✅ Eliminado de operaciones_bitget_activas")
+            
+            # Eliminar de operaciones_activas (persistencia)
+            if simbolo in self.operaciones_activas:
+                del self.operaciones_activas[simbolo]
+                logger.info(f"   ✅ Eliminado de operaciones_activas")
+            
+            # Eliminar IDs de órdenes SL/TP
+            if simbolo in self.order_ids_sl:
+                del self.order_ids_sl[simbolo]
+                logger.info(f"   ✅ order_ids_sl liberado")
+            
+            if simbolo in self.order_ids_tp:
+                del self.order_ids_tp[simbolo]
+                logger.info(f"   ✅ order_ids_tp liberado")
+            
+            # Eliminar de senales_enviadas para permitir nuevas señales
+            self.senales_enviadas.discard(simbolo)
+            logger.info(f"   ✅ senales_enviadas liberado")
+            
+            # Guardar estado inmediatamente
+            self.guardar_estado()
+            logger.info(f"✅ Estado guardado después de liberar {simbolo}")
+            
+        except Exception as e:
+            logger.error(f"❌ Error liberando símbolo {simbolo}: {e}")
+
     def sincronizar_con_bitget(self):
         """Sincronizar estado local con posiciones reales en Bitget - FUNCIÓN CRÍTICA"""
         if not self.bitget_client:
@@ -2227,7 +2142,55 @@ class TradingBot:
             
             # Verificar si hay nuevas operaciones en Bitget que no están en nuestro tracking
             for simbolo, pos_data in posiciones_activas.items():
-                if simbolo not in self.operaciones_activas:
+                if simbolo in self.operaciones_activas:
+                    # La operación ya existe en nuestro estado
+                    op_existente = self.operaciones_activas[simbolo]
+                    
+                    # Detectar si es operación automática:
+                    # 1. Si tiene explícitamente operacion_manual_usuario = False
+                    # 2. O si tiene operacion_ejecutada = True (asumimos automática si ya estaba ejecutada al cargar estado)
+                    tiene_flag_automatica = 'operacion_manual_usuario' in op_existente
+                    es_explicitamente_automatica = op_existente.get('operacion_manual_usuario') is False
+                    fue_ejecutada = op_existente.get('operacion_ejecutada', False)
+                    tiene_order_id = op_existente.get('order_id_entrada') is not None
+                    
+                    es_operacion_automatica = es_explicitamente_automatica or (fue_ejecutada and tiene_order_id)
+                    
+                    if es_operacion_automatica:
+                        # Operación automática restaurada desde el estado
+                        logger.info(f"🤖 OPERACIÓN AUTOMÁTICA RESTAURADA: {simbolo}")
+                        if tiene_flag_automatica:
+                            logger.info(f"   📊 Flag automática detectada")
+                        else:
+                            logger.info(f"   📊 Detected_from_state (compatibilidad): operacion_ejecutada=True, order_id={op_existente.get('order_id_entrada', 'N/A')}")
+                        
+                        # Actualizar operación existente con datos frescos del exchange
+                        tipo_operacion = op_existente.get('tipo', 'LONG' if pos_data['hold_side'] == 'long' else 'SHORT')
+                        self.operaciones_activas[simbolo].update({
+                            'precio_entrada_real': pos_data['average_price'],
+                            'pnl_no_realizado': pos_data['unrealized_pnl'],
+                            'size_real': pos_data['position_size'],
+                            'valor_nocional': pos_data['position_usdt'],
+                            'ultima_sincronizacion': datetime.now().isoformat(),
+                            # Asegurar flag para futuras sincronizaciones
+                            'operacion_manual_usuario': False
+                        })
+                        
+                        # Mantener en seguimiento de Bitget
+                        self.operaciones_bitget_activas[simbolo] = self.operaciones_activas[simbolo].copy()
+                    else:
+                        # Operación manual existente, actualizar datos
+                        logger.info(f"👤 Operación manual existente actualizada: {simbolo}")
+                        self.operaciones_activas[simbolo].update({
+                            'precio_entrada_real': pos_data['average_price'],
+                            'pnl_no_realizado': pos_data['unrealized_pnl'],
+                            'size_real': pos_data['position_size'],
+                            'valor_nocional': pos_data['position_usdt'],
+                            'ultima_sincronizacion': datetime.now().isoformat()
+                        })
+                        self.operaciones_bitget_activas[simbolo] = self.operaciones_activas[simbolo].copy()
+                else:
+                    # Nueva operación detectada - es manual del usuario
                     logger.info(f"👤 OPERACIÓN MANUAL DETECTADA: {simbolo}")
                     logger.info(f"   🛡️ El bot omitirá señales para este par hasta que cierres la operación")
                     logger.info(f"   📊 Detalles: {pos_data['hold_side'].upper()} | Precio: {pos_data['average_price']:.8f} | Size: {pos_data['position_size']}")
@@ -2241,7 +2204,7 @@ class TradingBot:
                         'timestamp_entrada': datetime.now().isoformat(),
                         'operacion_ejecutada': True,
                         'detected_from_exchange': True,
-                        'operacion_manual_usuario': True,  # NUEVO: Marca explícita de operación manual
+                        'operacion_manual_usuario': True,  # Marca explícita de operación manual
                         'pnl_no_realizado': pos_data['unrealized_pnl'],
                         'size_real': pos_data['position_size'],
                         'valor_nocional': pos_data['position_usdt'],
@@ -2282,81 +2245,128 @@ class TradingBot:
             logger.error(f"❌ Error en sincronización con Bitget: {e}")
 
     def verificar_y_recolocar_tp_sl(self):
-        """
-        Verificar estado de TP/SL en las posiciones.
-        
-        CORRECCIÓN: Ahora usa takeProfitId y stopLossId para determinar si las órdenes existen.
-        Los campos takeProfit y stopLoss (preset) pueden estar vacíos incluso cuando las órdenes existen.
-        La presencia de takeProfitId/stopLossId indica que las órdenes están activas.
-        """
+        """Verificar y recolocar automáticamente TP y SL si es necesario - SOLO PARA OPERACIONES AUTOMÁTICAS"""
         if not self.bitget_client:
             return
-
+        
         try:
-            logger.info("🔍 Verificando estado de TP/SL en posiciones...")
-
-            for simbolo, operacion in self.operaciones_bitget_activas.items():
+            logger.info("🔍 Verificando estado de órdenes TP/SL...")
+            
+            for simbolo, operacion in list(self.operaciones_bitget_activas.items()):
                 try:
-                    # Obtener posiciones activas del símbolo
-                    posiciones = self.bitget_client.get_positions(simbolo)
-
-                    if not posiciones:
-                        logger.warning(f"⚠️ No se encontraron posiciones para {simbolo}")
+                    # Verificar si es una operación MANUAL del usuario
+                    es_operacion_manual = operacion.get('operacion_manual_usuario', False)
+                    
+                    # PARA OPERACIONES MANUALES: Solo monitorear, NO recolocar SL/TP
+                    if es_operacion_manual:
+                        logger.info(f"👤 {simbolo}: Operación MANUAL detectada - Solo monitoreando, sin recolocación de SL/TP")
+                        
+                        # Verificar si la posición aún existe en Bitget
+                        posiciones = self.bitget_client.get_positions(simbolo)
+                        if not posiciones or len(posiciones) == 0:
+                            # La operación manual fue cerrada - LIBERAR EL SÍMBOLO
+                            logger.info(f"🆓 {simbolo}: Operación manual cerrada por usuario - Liberando símbolo para nuevos escaneos")
+                            self.liberar_simbolo(simbolo)
+                            del self.operaciones_bitget_activas[simbolo]
+                            if simbolo in self.order_ids_sl:
+                                del self.order_ids_sl[simbolo]
+                            if simbolo in self.order_ids_tp:
+                                del self.order_ids_tp[simbolo]
+                            self.guardar_estado()
                         continue
+                    
+                    # PARA OPERACIONES AUTOMÁTICAS: Proceder con recolocación de SL/TL
+                    # Verificar si las órdenes plan están activas consultando Bitget
+                    orden_sl_id = self.order_ids_sl.get(simbolo)
+                    orden_tp_id = self.order_ids_tp.get(simbolo)
+                    
+                    # Verificación REAL del estado de las órdenes en Bitget
+                    sl_activa = self.bitget_client.verificar_orden_activa(orden_sl_id, simbolo) if orden_sl_id else False
+                    tp_activa = self.bitget_client.verificar_orden_activa(orden_tp_id, simbolo) if orden_tp_id else False
+                    
+                    # Solo recolocar si las órdenes realmente no están activas
+                    if not sl_activa or not tp_activa:
+                        # Determinar qué órdenes necesitan recolocación
+                        sl_necesita = not sl_activa
+                        tp_necesita = not tp_activa
+                        
+                        if sl_necesita or tp_necesita:
+                            logger.info(f"ℹ️ Órdenes TP/SL para {simbolo}: SL={'OK' if sl_activa else 'FALTA'}, TP={'OK' if tp_activa else 'FALTA'}")
+                        
+                        # Obtener precio actual
+                        klines = self.bitget_client.get_klines(simbolo, '1m', 1)
+                        if not klines:
+                            continue
+                        
+                        klines.reverse()
+                        precio_actual = float(klines[0][4])
+                        
+                        # USAR LOS NIVELES ORIGINALES DE SL/TP (no recalcular desde precio actual)
+                        stop_loss = operacion.get('stop_loss')
+                        take_profit = operacion.get('take_profit')
+                        
+                        # Si por alguna razón no hay niveles guardados, usar porcentajes por defecto
+                        if not stop_loss or not take_profit:
+                            logger.warning(f"⚠️ No se encontraron niveles SL/TP originales para {simbolo}, recalculando...")
+                            tipo = operacion['tipo']
+                            sl_porcentaje = 0.02
+                            tp_porcentaje = 0.10
 
-                    # Buscar la posición del símbolo
-                    posicion_encontrada = False
-                    for pos in posiciones:
-                        if pos.get('symbol') == simbolo:
-                            posicion_encontrada = True
-                            
-                            # CORRECCIÓN: Verificar por IDs de órdenes, no solo por campos preset
-                            # Los campos takeProfit/stopLoss pueden estar vacíos, pero si hay IDs, las órdenes existen
-                            tp_id = pos.get('takeProfitId', '')
-                            sl_id = pos.get('stopLossId', '')
-                            tp_preset = pos.get('takeProfit', '')
-                            sl_preset = pos.get('stopLoss', '')
-                            
-                            tiene_tp = bool(tp_id and tp_id != '')
-                            tiene_sl = bool(sl_id and sl_id != '')
-                            
-                            if tiene_tp and tiene_sl:
-                                logger.info(f"✅ {simbolo}: TP/SL activos correctamente (IDs: TP={tp_id[:8]}..., SL={sl_id[:8]}...)")
-                                if tp_preset:
-                                    logger.info(f"   - TP (preset): {tp_preset}")
-                                if sl_preset:
-                                    logger.info(f"   - SL (preset): {sl_preset}")
-                            elif tiene_tp:
-                                logger.info(f"✅ {simbolo}: TP activo (ID: {tp_id[:8]}...)")
-                                if not tp_preset:
-                                    logger.info(f"   ℹ️ TP no visible como preset (orden independiente)")
-                                else:
-                                    logger.info(f"   - TP (preset): {tp_preset}")
-                                logger.warning(f"⚠️ {simbolo}: SL no detectado")
-                            elif tiene_sl:
-                                logger.info(f"✅ {simbolo}: SL activo (ID: {sl_id[:8]}...)")
-                                if not sl_preset:
-                                    logger.info(f"   ℹ️ SL no visible como preset (orden independiente)")
-                                else:
-                                    logger.info(f"   - SL (preset): {sl_preset}")
-                                logger.warning(f"⚠️ {simbolo}: TP no detectado")
+                            if tipo == "LONG":
+                                stop_loss = precio_actual * (1 - sl_porcentaje)
+                                take_profit = precio_actual * (1 + tp_porcentaje)
                             else:
-                                # No hay órdenes TP/SL - solo advertir si es necesario
-                                logger.warning(f"⚠️ {simbolo}: Sin órdenes TP/SL detectadas")
-                                logger.info(f"   ℹ️ La posición puede haber sido abierta manualmente")
-                                logger.info(f"   ℹ️ O las órdenes pueden estar en proceso de colocación")
-                            
-                            break
+                                stop_loss = precio_actual * (1 + sl_porcentaje)
+                                take_profit = precio_actual * (1 - tp_porcentaje)
+                        
+                        logger.info(f"ℹ️ Usando niveles originales para {simbolo}: SL={stop_loss}, TP={take_profit}")
+                        
+                        hold_side = 'long' if operacion['tipo'] == 'LONG' else 'short'
 
-                    if not posicion_encontrada:
-                        logger.warning(f"⚠️ Posición no encontrada para {simbolo}")
+                        # Recolocar SL solo si no está activa
+                        if sl_necesita:
+                            logger.info(f"🔧 Recolocando STOP LOSS para {simbolo}: {stop_loss}")
+                            orden_sl_nueva = self.bitget_client.place_tpsl_order(
+                                symbol=simbolo,
+                                hold_side=hold_side,
+                                trigger_price=stop_loss,
+                                order_type='stop_loss',
+                                stop_loss_price=stop_loss,
+                                take_profit_price=None,
+                                trade_direction=operacion['tipo']
+                            )
+                            if orden_sl_nueva:
+                                self.order_ids_sl[simbolo] = orden_sl_nueva.get('orderId')
+                                logger.info(f"✅ SL recolocada para {simbolo}")
+                            else:
+                                logger.warning(f"⚠️ No se pudo recolocar SL para {simbolo}")
 
+                        # Recolocar TP solo si no está activa
+                        if tp_necesita:
+                            logger.info(f"🔧 Recolocando TAKE PROFIT para {simbolo}: {take_profit}")
+                            orden_tp_nueva = self.bitget_client.place_tpsl_order(
+                                symbol=simbolo,
+                                hold_side=hold_side,
+                                trigger_price=take_profit,
+                                order_type='take_profit',
+                                stop_loss_price=None,
+                                take_profit_price=take_profit,
+                                trade_direction=operacion['tipo']
+                            )
+                            if orden_tp_nueva:
+                                self.order_ids_tp[simbolo] = orden_tp_nueva.get('orderId')
+                                logger.info(f"✅ TP recolocada para {simbolo}")
+                            else:
+                                logger.warning(f"⚠️ No se pudo recolocar TP para {simbolo}")
+                    else:
+                        logger.info(f"✅ Órdenes TP/SL activas para {simbolo}")
+                
                 except Exception as e:
-                    logger.error(f"❌ Error verificando posición para {simbolo}: {e}")
+                    logger.error(f"❌ Error verificando TP/SL para {simbolo}: {e}")
                     continue
-
-            logger.info("✅ Verificación de TP/SL completada")
-
+            
+            logger.info("✅ Verificación y recolocación de TP/SL completada")
+            
         except Exception as e:
             logger.error(f"❌ Error en verificación de TP/SL: {e}")
 
@@ -2709,8 +2719,7 @@ class TradingBot:
         """
         try:
             import matplotlib.font_manager as fm
-            # Usar fuentes seguras disponibles en servidores Linux
-            plt.rcParams['font.family'] = ['DejaVu Sans', 'Arial Unicode MS', 'Liberation Sans', 'FreeSans']
+            plt.rcParams['font.family'] = ['DejaVu Sans', 'Segoe UI Emoji', 'Apple Color Emoji', 'Noto Color Emoji']
             
             # Usar API de Bitget FUTUROS si está disponible
             if self.bitget_client:
@@ -2828,10 +2837,10 @@ class TradingBot:
             breakout_line = [precio_breakout] * len(df)
             if tipo_breakout == "BREAKOUT_LONG":
                 color_breakout = "#D68F01"
-                titulo_extra = "RUPTURA ALCISTA"
+                titulo_extra = "🚀 RUPTURA ALCISTA"
             else:
                 color_breakout = '#D68F01'
-                titulo_extra = "RUPTURA BAJISTA"
+                titulo_extra = "📉 RUPTURA BAJISTA"
             apds.append(mpf.make_addplot(breakout_line, color=color_breakout, linestyle='-', width=3, panel=0, alpha=0.8))
             # Stochastic
             apds.append(mpf.make_addplot(df['Stoch_K'], color='#00BFFF', width=1.5, panel=1, ylabel='Stochastic'))
@@ -2842,7 +2851,7 @@ class TradingBot:
             apds.append(mpf.make_addplot(oversold, color="#E9E4E4", linestyle='--', width=0.8, panel=1, alpha=0.5))
             # Crear gráfico
             fig, axes = mpf.plot(df, type='candle', style='nightclouds',
-                               title=f'{simbolo} | {titulo_extra} | {config_optima["timeframe"]} | ESPERANDO REENTRY',
+                               title=f'{simbolo} | {titulo_extra} | {config_optima["timeframe"]} | ⏳ ESPERANDO REENTRY',
                                ylabel='Precio',
                                addplot=apds,
                                volume=False,
@@ -2897,92 +2906,79 @@ class TradingBot:
         return None
 
     def detectar_reentry(self, simbolo, info_canal, datos_mercado):
-        """
-        Detecta si el precio ha REINGRESADO al canal después del breakout.
-        
-        CORRECCIÓN CRÍTICA: La señal debe coincidir con la TENDENCIA del canal, 
-        NO con el tipo de breakout.
-        
-        Lógica correcta según estrategia Breakout + Reentry:
-        - Canal ALCISTA: La entrada SIEMPRE es LONG (el breakout es continuación de tendencia)
-        - Canal BAJISTA: La entrada SIEMPRE es SHORT (el breakout es continuación de tendencia)
-        
-        El breakout NO es una señal de reversión, es una señal de CONTINUACIÓN de tendencia.
-        Por lo tanto:
-        - En canal ALCISTA, aunque el precio rompa la resistencia, la entrada sigue siendo LONG
-        - En canal BAJISTA, aunque el precio rompa el soporte, la entrada sigue siendo SHORT
-        """
+        """Detecta si el precio ha REINGRESADO al canal"""
         if simbolo not in self.esperando_reentry:
             return None
-        
         breakout_info = self.esperando_reentry[simbolo]
         tipo_breakout = breakout_info['tipo']
         timestamp_breakout = breakout_info['timestamp']
         tiempo_desde_breakout = (datetime.now() - timestamp_breakout).total_seconds() / 60
-        
-        # Timeout de reentry (30 minutos máximo)
         if tiempo_desde_breakout > 120:
             print(f"     ⏰ {simbolo} - Timeout de reentry (>30 min), cancelando espera")
             del self.esperando_reentry[simbolo]
             if simbolo in self.breakouts_detectados:
                 del self.breakouts_detectados[simbolo]
             return None
-        
         precio_actual = datos_mercado['precio_actual']
         resistencia = info_canal['resistencia']
         soporte = info_canal['soporte']
         stoch_k = info_canal['stoch_k']
         stoch_d = info_canal['stoch_d']
-        direccion_tendencia = info_canal.get('direccion', 'RANGO')
-        
         tolerancia = 0.001 * precio_actual
-        
-        # CORRECCIÓN: La señal depende de la TENDENCIA del canal, NO del tipo de breakout
-        if direccion_tendencia == '🟢 ALCISTA':
-            # Canal ALCISTA: La entrada SIEMPRE es LONG
+        if tipo_breakout == "BREAKOUT_LONG":
             if soporte <= precio_actual <= resistencia:
                 distancia_soporte = abs(precio_actual - soporte)
                 if distancia_soporte <= tolerancia and stoch_k <= 30 and stoch_d <= 30:
-                    print(f"     ✅ {simbolo} - REENTRY LONG confirmado! (Canal ALCISTA, precio en soporte)")
+                    print(f"     ✅ {simbolo} - REENTRY LONG confirmado! Entrada en soporte con Stoch oversold")
                     if simbolo in self.breakouts_detectados:
                         del self.breakouts_detectados[simbolo]
                     return "LONG"
-                    
-        elif direccion_tendencia == '🔴 BAJISTA':
-            # Canal BAJISTA: La entrada SIEMPRE es SHORT
+        elif tipo_breakout == "BREAKOUT_SHORT":
             if soporte <= precio_actual <= resistencia:
                 distancia_resistencia = abs(precio_actual - resistencia)
                 if distancia_resistencia <= tolerancia and stoch_k >= 70 and stoch_d >= 70:
-                    print(f"     ✅ {simbolo} - REENTRY SHORT confirmado! (Canal BAJISTA, precio en resistencia)")
+                    print(f"     ✅ {simbolo} - REENTRY SHORT confirmado! Entrada en resistencia con Stoch overbought")
                     if simbolo in self.breakouts_detectados:
                         del self.breakouts_detectados[simbolo]
                     return "SHORT"
-        
         return None
 
     def calcular_niveles_entrada(self, tipo_operacion, info_canal, precio_actual):
+        """Calcula niveles de entrada, SL y TP.
+        
+        El TP se coloca en el ANCHO COMPLETO DEL CANAL (lado opuesto):
+        - LONG: TP en la resistencia (límite superior del canal)
+        - SHORT: TP en el soporte (límite inferior del canal)
+        """
         if not info_canal:
             return None, None, None
         resistencia = info_canal['resistencia']
         soporte = info_canal['soporte']
         ancho_canal = resistencia - soporte
         sl_porcentaje = 0.02
+        
         if tipo_operacion == "LONG":
             precio_entrada = precio_actual
             stop_loss = precio_entrada * (1 - sl_porcentaje)
-            take_profit = precio_entrada + ancho_canal 
+            # TP en la resistencia (ancho completo del canal desde el soporte)
+            take_profit = resistencia
         else:
             precio_entrada = precio_actual
             stop_loss = resistencia * (1 + sl_porcentaje)
-            take_profit = precio_entrada - ancho_canal
+            # TP en el soporte (ancho completo del canal desde la resistencia)
+            take_profit = soporte
+        
         riesgo = abs(precio_entrada - stop_loss)
         beneficio = abs(take_profit - precio_entrada)
         ratio_rr = beneficio / riesgo if riesgo > 0 else 0
-        if ratio_rr < self.config.get('min_rr_ratio', 1.2):
+        
+        # Solo ajustar si el ratio es muy bajo (protección adicional)
+        if ratio_rr < 0.5:
             if tipo_operacion == "LONG":
                 take_profit = precio_entrada + (riesgo * self.config['min_rr_ratio'])
             else:
                 take_profit = precio_entrada - (riesgo * self.config['min_rr_ratio'])
+        
         return precio_entrada, take_profit, stop_loss
 
     def escanear_mercado(self):
@@ -3064,18 +3060,21 @@ class TradingBot:
                 )
                 if not precio_entrada or not tp or not sl:
                     continue
-                if simbolo in self.breakout_history:
-                    ultimo_breakout = self.breakout_history[simbolo]
-                    tiempo_desde_ultimo = (datetime.now() - ultimo_breakout).total_seconds() / 3600
-                    if tiempo_desde_ultimo < 2:
-                        print(f"   ⏳ {simbolo} - Señal reciente, omitiendo...")
-                        continue
+                
+                # CORRECCIÓN: Verificar cooldown más permisivo
+                # Solo bloquear si hay una operación activa para este símbolo
+                # NO bloquear solo por breakout_history (eso bloqueaba reentries válidos)
+                if simbolo in self.operaciones_activas:
+                    print(f"   ⏳ {simbolo} - Operación activa existente, omitiendo...")
+                    continue
+                
                 breakout_info = self.esperando_reentry[simbolo]
                 self.generar_senal_operacion(
                     simbolo, tipo_operacion, precio_entrada, tp, sl, 
                     info_canal, datos_mercado, config_optima, breakout_info
                 )
                 senales_encontradas += 1
+                # Actualizar breakout_history SOLO cuando se genera una señal exitosa
                 self.breakout_history[simbolo] = datetime.now()
                 del self.esperando_reentry[simbolo]
             except Exception as e:
@@ -3110,6 +3109,7 @@ class TradingBot:
                 print(f"    🚫 {simbolo} - Operación automática activa, omitiendo señal")
             return
         if simbolo in self.senales_enviadas:
+            print(f"    ⏳ {simbolo} - Señal ya procesada anteriormente, omitiendo...")
             return
         if precio_entrada is None or tp is None or sl is None:
             print(f"    ❌ Niveles inválidos para {simbolo}, omitiendo señal")
@@ -3223,6 +3223,7 @@ class TradingBot:
                         'stoch_d': info_canal['stoch_d'],
                         'breakout_usado': breakout_info is not None,
                         'operacion_ejecutada': True,  # Confirma ejecución exitosa
+                        'operacion_manual_usuario': False,  # MARCA EXPLÍCITA: Operación automática
                         # NUEVOS CAMPOS PARA BITGET
                         'order_id_entrada': operacion_bitget['orden_entrada'].get('orderId'),
                         'order_id_sl': operacion_bitget['orden_sl'].get('orderId') if operacion_bitget['orden_sl'] else None,
@@ -3844,6 +3845,7 @@ class TradingBot:
             except:
                 pass
 
+
 # ---------------------------
 # CONFIGURACIÓN SIMPLE
 # ---------------------------
@@ -3859,10 +3861,11 @@ def crear_config_desde_entorno():
         'min_trend_strength_degrees': 16.0,
         'entry_margin': 0.001,
         'min_rr_ratio': 1.2,
-        'scan_interval_minutes': 6,
-        'timeframes': ['5m', '15m', '30m', '1h','4h'],
+        'scan_interval_minutes': 6,  
+        'timeframes': ['5m', '15m', '30m', '1h', '4h'],
         'velas_options': [80, 100, 120, 150, 200],
         'symbols': [
+            # SOLO LOS QUE SÍ FUNCIONARON EN TU LOG (65)
             'PEPEUSDT', 'WIFUSDT', 'FLOKIUSDT', 'SHIBUSDT', 'POPCATUSDT',
             'CHILLGUYUSDT', 'PNUTUSDT', 'MEWUSDT', 'FARTCOINUSDT', 'DOGEUSDT',
             'VINEUSDT', 'HIPPOUSDT', 'TRXUSDT', 'XLMUSDT', 'XRPUSDT',
@@ -3882,24 +3885,23 @@ def crear_config_desde_entorno():
             'TONUSDT', 'NMRUSDT', 'TRUMPUSDT',
             # Símbolos adicionales añadidos por el usuario
             'IPUSDT', 'TAOUSDT', 'XPLUSDT', 'HOLOUSDT', 'MONUSDT',
-            'OGUSDT', 'MSTRUSDT', 'VIRTUALUSDT', 'NOTUSDT', 'ORDIUSDT',
+            'OGUSDT', 'MSTRUSDT', 'VIRTUALUSDT', 'ORDIUSDT',
             'TLMUSDT', 'BOMEUSDT', 'KAITOUSDT', 'APEUSDT', 'METUSDT',
             'TUTUSDT'
         ],
         'telegram_token': os.environ.get('TELEGRAM_TOKEN'),
         'telegram_chat_ids': telegram_chat_ids,
         'auto_optimize': True,
-        'min_samples_optimizacion': 30,
-        'reevaluacion_horas': 24,
-        'log_path': os.path.join(directorio_actual, 'operaciones_log_v23.csv'),
-        'estado_file': os.path.join(directorio_actual, 'estado_bot_v23.json'),
+        'min_samples_optimizacion': 15,
+        'reevaluacion_horas': 6,
+        'log_path': os.path.join(directorio_actual, 'operaciones_log_v23_real.csv'),
+        'estado_file': os.path.join(directorio_actual, 'estado_bot_v23_real.json'),
         'bitget_api_key': os.environ.get('BITGET_API_KEY'),
         'bitget_api_secret': os.environ.get('BITGET_SECRET_KEY'),
         'bitget_passphrase': os.environ.get('BITGET_PASSPHRASE'),
         'webhook_url': os.environ.get('WEBHOOK_URL'),
         'ejecutar_operaciones_automaticas': os.environ.get('EJECUTAR_OPERACIONES_AUTOMATICAS', 'false').lower() == 'true',
-        'capital_por_operacion': float(os.environ.get('CAPITAL_POR_OPERACION', '2')),
-        'leverage_por_defecto': min(int(os.environ.get('LEVERAGE_POR_DEFECTO', '10')), 10)
+        'leverage_por_defecto': min(int(os.environ.get('LEVERAGE_POR_DEFECTO', '20')), 20)
     }
 
 # ---------------------------
