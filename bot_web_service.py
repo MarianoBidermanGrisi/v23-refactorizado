@@ -2928,7 +2928,7 @@ class TradingBot:
         if tipo_breakout == "BREAKOUT_LONG":
             if soporte <= precio_actual <= resistencia:
                 distancia_soporte = abs(precio_actual - soporte)
-                if distancia_soporte <= tolerancia and stoch_k <= 30 and stoch_d <= 30:
+                if distancia_soporte <= tolerancia and stoch_k > stoch_d and stoch_d <= 20:
                     print(f"     ✅ {simbolo} - REENTRY LONG confirmado! Entrada en soporte con Stoch oversold")
                     if simbolo in self.breakouts_detectados:
                         del self.breakouts_detectados[simbolo]
@@ -2936,7 +2936,7 @@ class TradingBot:
         elif tipo_breakout == "BREAKOUT_SHORT":
             if soporte <= precio_actual <= resistencia:
                 distancia_resistencia = abs(precio_actual - resistencia)
-                if distancia_resistencia <= tolerancia and stoch_k >= 70 and stoch_d >= 70:
+                if distancia_resistencia <= tolerancia and stoch_k < stoch_d and stoch_d >= 80:
                     print(f"     ✅ {simbolo} - REENTRY SHORT confirmado! Entrada en resistencia con Stoch overbought")
                     if simbolo in self.breakouts_detectados:
                         del self.breakouts_detectados[simbolo]
@@ -3869,23 +3869,23 @@ def crear_config_desde_entorno():
             'PEPEUSDT', 'WIFUSDT', 'FLOKIUSDT', 'SHIBUSDT', 'POPCATUSDT',
             'CHILLGUYUSDT', 'PNUTUSDT', 'MEWUSDT', 'FARTCOINUSDT', 'DOGEUSDT',
             'VINEUSDT', 'HIPPOUSDT', 'TRXUSDT', 'XLMUSDT', 'XRPUSDT',
-            'ADAUSDT', 'ATOMUSDT', 'ETCUSDT', 'LINKUSDT', 'UNIUSDT',
+            'ADAUSDT', 'ATOMUSDT', 'LINKUSDT', 'UNIUSDT',
             'SUSHIUSDT', 'CRVUSDT', 'SNXUSDT', 'SANDUSDT', 'MANAUSDT',
             'AXSUSDT', 'LRCUSDT', 'ARBUSDT', 'OPUSDT', 'INJUSDT',
-            'FILUSDT', 'SUIUSDT', 'AAVEUSDT', 'COMPUSDT', 'ENSUSDT',
-            'LDOUSDT', 'RENDERUSDT', 'POLUSDT', 'ALGOUSDT', 'QNTUSDT',
+            'FILUSDT', 'SUIUSDT', 'AAVEUSDT', 'ENSUSDT',
+            'LDOUSDT', 'POLUSDT', 'ALGOUSDT', 'QNTUSDT',
             '1INCHUSDT', 'CVCUSDT', 'STGUSDT', 'ENJUSDT', 'GALAUSDT',
             'MAGICUSDT', 'REZUSDT', 'BLURUSDT', 'HMSTRUSDT', 'BEATUSDT',
             'ZEREBROUSDT', 'ZENUSDT', 'CETUSUSDT', 'DRIFTUSDT', 'PHAUSDT',
-            'API3USDT', 'ACHUSDT', 'SPELLUSDT', 'ILVUSDT', 'YGGUSDT',
+            'API3USDT', 'ACHUSDT', 'SPELLUSDT', 'YGGUSDT',
             'GMXUSDT', 'C98USDT',
             # Nuevos símbolos añadidos
             'XMRUSDT', 'DOTUSDT', 'BNBUSDT', 'SOLUSDT', 'AVAXUSDT',
-            'VETUSDT', 'ICPUSDT', 'BCHUSDT', 'NEOUSDT', 'TIAUSDT',
-            'TONUSDT', 'NMRUSDT', 'TRUMPUSDT',
+            'VETUSDT', 'BCHUSDT', 'NEOUSDT', 'TIAUSDT',
+            'TONUSDT', 'TRUMPUSDT',
             # Símbolos adicionales añadidos por el usuario
             'IPUSDT', 'TAOUSDT', 'XPLUSDT', 'HOLOUSDT', 'MONUSDT',
-            'OGUSDT', 'MSTRUSDT', 'VIRTUALUSDT', 'ORDIUSDT',
+            'OGUSDT', 'MSTRUSDT', 'VIRTUALUSDT', 
             'TLMUSDT', 'BOMEUSDT', 'KAITOUSDT', 'APEUSDT', 'METUSDT',
             'TUTUSDT'
         ],
