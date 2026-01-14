@@ -1141,8 +1141,8 @@ class TradingBot:
                 
                 precio_actual = datos_mercado['precio_actual']
                 
-                if (info_canal['nivel_fuerza'] < 2 or 
-                    abs(info_canal['coeficiente_pearson']) < 0.4 or 
+                if (info_canal['nivel_fuerza'] < 2 or
+                    abs(info_canal['pearson']) < 0.4 or
                     info_canal['r2_score'] < 0.4):
                     continue
                 
