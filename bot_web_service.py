@@ -1057,23 +1057,45 @@ class TradingBot:
         return None
 
     def detectar_reentry(self, simbolo, info_canal, datos_mercado):
-        """Detecta oportunidades de reentrada"""
+        """Detecta si el precio ha REINGRESADO al canal"""
+        if simbolo not in self.esperando_reentry:
+            return None
+        
+        breakout_info = self.esperando_reentry[simbolo]
+        tipo_breakout = breakout_info['tipo']
+        timestamp_breakout = breakout_info['timestamp']
+        tiempo_desde_breakout = (datetime.now() - timestamp_breakout).total_seconds() / 60
+        
+        if tiempo_desde_breakout > 120:
+            print(f"     ⏰ {simbolo} - Timeout de reentry (>120 min), cancelando espera")
+            del self.esperando_reentry[simbolo]
+            if simbolo in self.breakouts_detectados:
+                del self.breakouts_detectados[simbolo]
+            return None
+        
         precio_actual = datos_mercado['precio_actual']
         resistencia = info_canal['resistencia']
         soporte = info_canal['soporte']
+        stoch_k = info_canal['stoch_k']
+        stoch_d = info_canal['stoch_d']
+        tolerancia = 0.001 * precio_actual
         
-        datos_previos = self.obtener_datos_mercado_config(simbolo, '1m', 20)
-        if datos_previos and len(datos_previos['cierres']) >= 5:
-            media_corta = sum(datos_previos['cierres'][-5:]) / 5
-            media_larga = sum(datos_previos['cierres'][-20:]) / 20 if len(datos_previos['cierres']) >= 20 else media_corta
-            tendencia_corta = media_corta - media_larga
-            
-            if info_canal['angulo_tendencia'] > 0 and tendencia_corta > 0 and info_canal['stoch_k'] < 80:
-                if precio_actual > resistencia:
-                    return 'LONG'
-            elif info_canal['angulo_tendencia'] < 0 and tendencia_corta < 0 and info_canal['stoch_k'] > 20:
-                if precio_actual < soporte:
-                    return 'SHORT'
+        if tipo_breakout == "BREAKOUT_LONG":
+            if soporte <= precio_actual <= resistencia:
+                distancia_soporte = abs(precio_actual - soporte)
+                if distancia_soporte <= tolerancia and stoch_k > stoch_d and stoch_d <= 20:
+                    print(f"     ✅ {simbolo} - REENTRY LONG confirmado! Entrada en soporte con Stoch oversold")
+                    if simbolo in self.breakouts_detectados:
+                        del self.breakouts_detectados[simbolo]
+                    return "LONG"
+        elif tipo_breakout == "BREAKOUT_SHORT":
+            if soporte <= precio_actual <= resistencia:
+                distancia_resistencia = abs(precio_actual - resistencia)
+                if distancia_resistencia <= tolerancia and stoch_k < stoch_d and stoch_d >= 80:
+                    print(f"     ✅ {simbolo} - REENTRY SHORT confirmado! Entrada en resistencia con Stoch overbought")
+                    if simbolo in self.breakouts_detectados:
+                        del self.breakouts_detectados[simbolo]
+                    return "SHORT"
         return None
 
     def calcular_niveles_entrada(self, tipo_operacion, info_canal, precio_actual):
