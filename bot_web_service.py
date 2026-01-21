@@ -2902,14 +2902,16 @@ class TradingBot:
             if tiempo_desde_ultimo < 115:
                 print(f"     ⏰ {simbolo} - Breakout detectado recientemente ({tiempo_desde_ultimo:.1f} min), omitiendo...")
                 return None
-        # CORREGIR LÓGICA DE DETECCIÓN DE BREAKOUT
+        # LÓGICA CORRECTA DE BREAKOUT:
+        # Canal ALCISTA: Precio rompe resistencia hacia arriba → BREAKOUT_LONG
+        # Canal BAJISTA: Precio rompe soporte hacia abajo → BREAKOUT_SHORT
         if direccion == "🟢 ALCISTA" and nivel_fuerza >= 2:
-            if precio_cierre < soporte:  # Precio rompió hacia abajo el soporte
-                print(f"     🚀 {simbolo} - BREAKOUT LONG: {precio_cierre:.8f} < Soporte: {soporte:.8f}")
+            if precio_cierre > resistencia:  # Precio rompió hacia arriba la resistencia
+                print(f"     🚀 {simbolo} - BREAKOUT LONG: {precio_cierre:.8f} > Resistencia: {resistencia:.8f}")
                 return "BREAKOUT_LONG"
         elif direccion == "🔴 BAJISTA" and nivel_fuerza >= 2:
-            if precio_cierre > resistencia:  # Precio rompió hacia arriba la resistencia
-                print(f"     📉 {simbolo} - BREAKOUT SHORT: {precio_cierre:.8f} > Resistencia: {resistencia:.8f}")
+            if precio_cierre < soporte:  # Precio rompió hacia abajo el soporte
+                print(f"     📉 {simbolo} - BREAKOUT SHORT: {precio_cierre:.8f} < Soporte: {soporte:.8f}")
                 return "BREAKOUT_SHORT"
         return None
 
