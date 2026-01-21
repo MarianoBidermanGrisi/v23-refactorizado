@@ -25,6 +25,14 @@ from flask import Flask, request, jsonify
 import threading
 import logging
 
+# Importar indicador ADX/DI para confirmación de tendencias
+try:
+    from adx_di_indicator import calculate_adx_di, get_adx_confirmation, preparar_datos_adx
+    ADX_INDICATOR_DISPONIBLE = True
+except ImportError:
+    ADX_INDICATOR_DISPONIBLE = False
+    print("⚠️ ADX/DI indicator no disponible, usando solo Stochastic")
+
 # Configurar logging básico
 logging.basicConfig(level=logging.INFO, stream=sys.stdout, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
@@ -2906,7 +2914,7 @@ class TradingBot:
         return None
 
     def detectar_reentry(self, simbolo, info_canal, datos_mercado):
-        """Detecta si el precio ha REINGRESADO al canal"""
+        """Detecta si el precio ha REINGRESADO al canal con confirmación ADX/DI + Stochastic"""
         if simbolo not in self.esperando_reentry:
             return None
         breakout_info = self.esperando_reentry[simbolo]
@@ -2925,19 +2933,39 @@ class TradingBot:
         stoch_k = info_canal['stoch_k']
         stoch_d = info_canal['stoch_d']
         tolerancia = 0.001 * precio_actual
+        
+        # Obtener confirmación ADX/DI
+        resultado_adx = self.calcular_adx_di(datos_mercado, threshold=20)
+        
         if tipo_breakout == "BREAKOUT_LONG":
             if soporte <= precio_actual <= resistencia:
                 distancia_soporte = abs(precio_actual - soporte)
-                if distancia_soporte <= tolerancia and stoch_k > stoch_d and stoch_d <= 20:
-                    print(f"     ✅ {simbolo} - REENTRY LONG confirmado! Entrada en soporte con Stoch oversold")
+                # Verificar Stochastic oversold + ADX confirmación
+                stoch_confirma = stoch_k > stoch_d and stoch_d <= 20
+                adx_confirma = resultado_adx['confirmacion'] and resultado_adx['direccion'] == 'LONG'
+                
+                if distancia_soporte <= tolerancia and stoch_confirma:
+                    if adx_confirma:
+                        print(f"     ✅ {simbolo} - REENTRY LONG confirmado! Entrada en soporte con Stoch oversold + ADX ALCISTA")
+                        print(f"     📊 ADX: {resultado_adx['adx']:.1f}, DI+: {resultado_adx['di_plus']:.1f}, DI-: {resultado_adx['di_minus']:.1f}")
+                    else:
+                        print(f"     ⚠️ {simbolo} - REENTRY LONG con Stoch pero ADX {'no disponible' if resultado_adx['adx'] == 0 else 'neutral/debility'}: {resultado_adx['mensaje']}")
                     if simbolo in self.breakouts_detectados:
                         del self.breakouts_detectados[simbolo]
                     return "LONG"
         elif tipo_breakout == "BREAKOUT_SHORT":
             if soporte <= precio_actual <= resistencia:
                 distancia_resistencia = abs(precio_actual - resistencia)
-                if distancia_resistencia <= tolerancia and stoch_k < stoch_d and stoch_d >= 80:
-                    print(f"     ✅ {simbolo} - REENTRY SHORT confirmado! Entrada en resistencia con Stoch overbought")
+                # Verificar Stochastic overbought + ADX confirmación
+                stoch_confirma = stoch_k < stoch_d and stoch_d >= 80
+                adx_confirma = resultado_adx['confirmacion'] and resultado_adx['direccion'] == 'SHORT'
+                
+                if distancia_resistencia <= tolerancia and stoch_confirma:
+                    if adx_confirma:
+                        print(f"     ✅ {simbolo} - REENTRY SHORT confirmado! Entrada en resistencia con Stoch overbought + ADX BAJISTA")
+                        print(f"     📊 ADX: {resultado_adx['adx']:.1f}, DI-: {resultado_adx['di_minus']:.1f}, DI+: {resultado_adx['di_plus']:.1f}")
+                    else:
+                        print(f"     ⚠️ {simbolo} - REENTRY SHORT con Stoch pero ADX {'no disponible' if resultado_adx['adx'] == 0 else 'neutral/debility'}: {resultado_adx['mensaje']}")
                     if simbolo in self.breakouts_detectados:
                         del self.breakouts_detectados[simbolo]
                     return "SHORT"
@@ -3444,6 +3472,105 @@ class TradingBot:
                 k_final = k_smoothed[-1]
                 return k_final, d
         return 50, 50
+
+    def calcular_adx_di(self, datos_mercado, length=14, threshold=20):
+        """
+        Calcula el ADX (Average Directional Index) y los indicadores DI+ y DI-
+        para confirmación de tendencia.
+        
+        Args:
+            datos_mercado: Dict con listas de 'maximos', 'minimos', 'cierres'
+            length: Período para el cálculo (default: 14)
+            threshold: Umbral del ADX para considerar tendencia fuerte (default: 20)
+        
+        Returns:
+            dict con: 'di_plus', 'di_minus', 'adx', 'confirmacion', 'direccion', 'mensaje'
+        """
+        if not ADX_INDICATOR_DISPONIBLE:
+            return {
+                'di_plus': 0, 'di_minus': 0, 'adx': 0,
+                'confirmacion': False, 'direccion': 'NEUTRAL',
+                'mensaje': 'ADX no disponible'
+            }
+        
+        try:
+            # Preparar datos para ADX
+            df = preparar_datos_adx(datos_mercado)
+            if df is None or len(df) < length + 14:
+                return {
+                    'di_plus': 0, 'di_minus': 0, 'adx': 0,
+                    'confirmacion': False, 'direccion': 'NEUTRAL',
+                    'mensaje': 'Datos insuficientes para ADX'
+                }
+            
+            # Calcular ADX/DI
+            result_df = calculate_adx_di(df, length=length, threshold=threshold)
+            
+            # Obtener valores actuales
+            di_plus = result_df['DIPlus'].iloc[-1]
+            di_minus = result_df['DIMinus'].iloc[-1]
+            adx = result_df['ADX'].iloc[-1]
+            
+            # Obtener confirmación
+            confirmacion = get_adx_confirmation(di_plus, di_minus, adx, threshold)
+            
+            return {
+                'di_plus': di_plus,
+                'di_minus': di_minus,
+                'adx': adx,
+                'confirmacion': confirmacion['confirmacion'],
+                'direccion': confirmacion['direccion'],
+                'fuerza': confirmacion.get('fuerza', 'N/A'),
+                'mensaje': confirmacion['mensaje']
+            }
+        except Exception as e:
+            print(f"     ⚠️ Error calculando ADX/DI: {e}")
+            return {
+                'di_plus': 0, 'di_minus': 0, 'adx': 0,
+                'confirmacion': False, 'direccion': 'NEUTRAL',
+                'mensaje': f'Error en ADX: {str(e)}'
+            }
+
+    def verificar_confirmacion_adx(self, tipo_operacion, datos_mercado, threshold_adx=20):
+        """
+        Verifica la confirmación del ADX/DI para una operación específica.
+        
+        Args:
+            tipo_operacion: 'LONG' o 'SHORT'
+            datos_mercado: Datos del mercado
+            threshold_adx: Umbral mínimo del ADX
+        
+        Returns:
+            dict con: 'confirmado', 'detalles', 'mensaje'
+        """
+        resultado_adx = self.calcular_adx_di(datos_mercado, threshold=threshold_adx)
+        
+        if not resultado_adx['confirmacion']:
+            return {
+                'confirmado': False,
+                'detalles': resultado_adx,
+                'mensaje': f"❌ {resultado_adx['mensaje']}"
+            }
+        
+        # Verificar que la dirección del ADX coincida con el tipo de operación
+        if tipo_operacion == 'LONG' and resultado_adx['direccion'] == 'LONG':
+            return {
+                'confirmado': True,
+                'detalles': resultado_adx,
+                'mensaje': f"✅ ADX confirma LONG: {resultado_adx['mensaje']}"
+            }
+        elif tipo_operacion == 'SHORT' and resultado_adx['direccion'] == 'SHORT':
+            return {
+                'confirmado': True,
+                'detalles': resultado_adx,
+                'mensaje': f"✅ ADX confirma SHORT: {resultado_adx['mensaje']}"
+            }
+        else:
+            return {
+                'confirmado': False,
+                'detalles': resultado_adx,
+                'mensaje': f"❌ ADX contradice operación: {resultado_adx['mensaje']}"
+            }
 
     def calcular_regresion_lineal(self, x, y):
         if len(x) != len(y) or len(x) == 0:
