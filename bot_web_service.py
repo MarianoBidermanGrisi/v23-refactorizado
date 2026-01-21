@@ -2944,10 +2944,10 @@ class TradingBot:
                 stoch_confirma = stoch_k > stoch_d and stoch_d <= 20
                 adx_confirma = resultado_adx['confirmacion'] and resultado_adx['direccion'] == 'LONG'
                 
-                if distancia_soporte <= tolerancia and stoch_confirma:
+                if distancia_soporte <= tolerancia :
                     if adx_confirma:
                         print(f"     ✅ {simbolo} - REENTRY LONG confirmado! Entrada en soporte con Stoch oversold + ADX ALCISTA")
-                        print(f"     📊 ADX: {resultado_adx['adx']:.1f}, DI+: {resultado_adx['di_plus']:.1f}, DI-: {resultado_adx['di_minus']:.1f}")
+                        print(f"     📊  DI-: {resultado_adx['di_minus']:.1f}")
                     else:
                         print(f"     ⚠️ {simbolo} - REENTRY LONG con Stoch pero ADX {'no disponible' if resultado_adx['adx'] == 0 else 'neutral/debility'}: {resultado_adx['mensaje']}")
                     if simbolo in self.breakouts_detectados:
@@ -2960,10 +2960,10 @@ class TradingBot:
                 stoch_confirma = stoch_k < stoch_d and stoch_d >= 80
                 adx_confirma = resultado_adx['confirmacion'] and resultado_adx['direccion'] == 'SHORT'
                 
-                if distancia_resistencia <= tolerancia and stoch_confirma:
+                if distancia_resistencia <= tolerancia :
                     if adx_confirma:
                         print(f"     ✅ {simbolo} - REENTRY SHORT confirmado! Entrada en resistencia con Stoch overbought + ADX BAJISTA")
-                        print(f"     📊 ADX: {resultado_adx['adx']:.1f}, DI-: {resultado_adx['di_minus']:.1f}, DI+: {resultado_adx['di_plus']:.1f}")
+                        print(f"     📊 DI+: {resultado_adx['di_plus']:.1f}")
                     else:
                         print(f"     ⚠️ {simbolo} - REENTRY SHORT con Stoch pero ADX {'no disponible' if resultado_adx['adx'] == 0 else 'neutral/debility'}: {resultado_adx['mensaje']}")
                     if simbolo in self.breakouts_detectados:
