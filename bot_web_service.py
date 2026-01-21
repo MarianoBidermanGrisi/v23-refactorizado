@@ -2914,7 +2914,7 @@ class TradingBot:
         return None
 
     def detectar_reentry(self, simbolo, info_canal, datos_mercado):
-        """Detecta si el precio ha REINGRESADO al canal con confirmación ADX/DI"""
+        """Detecta si el precio ha REINGRESADO al canal con confirmación DI+ > DI- o DI- > DI+"""
         if simbolo not in self.esperando_reentry:
             return None
         breakout_info = self.esperando_reentry[simbolo]
@@ -2932,37 +2932,42 @@ class TradingBot:
         soporte = info_canal['soporte']
         tolerancia = 0.001 * precio_actual
         
-        # Obtener confirmación ADX/DI
+        # Obtener valores DI+ y DI-
         resultado_adx = self.calcular_adx_di(datos_mercado, threshold=20)
+        di_plus = resultado_adx['di_plus']
+        di_minus = resultado_adx['di_minus']
+        
+        # Confirmación SOLO con DI+ > DI- o DI- > DI+
+        direccion_confirmada = 'LONG' if di_plus > di_minus else 'SHORT' if di_minus > di_plus else 'NEUTRAL'
         
         if tipo_breakout == "BREAKOUT_LONG":
             if soporte <= precio_actual <= resistencia:
                 distancia_soporte = abs(precio_actual - soporte)
-                # Verificar solo confirmación ADX/DI (DI+ > DI-)
-                adx_confirma = resultado_adx['confirmacion'] and resultado_adx['direccion'] == 'LONG'
+                # Solo verificar que DI+ > DI- para LONG
+                di_confirma = di_plus > di_minus
                 
-                if distancia_soporte <= tolerancia and adx_confirma:
-                    print(f"     ✅ {simbolo} - REENTRY LONG confirmado! Entrada en soporte con ADX ALCISTA")
-                    print(f"     📊 ADX: {resultado_adx['adx']:.1f}, DI+: {resultado_adx['di_plus']:.1f}, DI-: {resultado_adx['di_minus']:.1f}")
+                if distancia_soporte <= tolerancia and di_confirma:
+                    print(f"     ✅ {simbolo} - REENTRY LONG confirmado! Entrada en soporte con DI+ > DI-")
+                    print(f"     📊 DI+: {di_plus:.1f}, DI-: {di_minus:.1f}")
                     if simbolo in self.breakouts_detectados:
                         del self.breakouts_detectados[simbolo]
                     return "LONG"
-                elif distancia_soporte <= tolerancia and not resultado_adx['confirmacion']:
-                    print(f"     ⚠️ {simbolo} - REENTRY LONG en soporte pero ADX no confirma: {resultado_adx['mensaje']}")
+                elif distancia_soporte <= tolerancia and not di_confirma:
+                    print(f"     ⚠️ {simbolo} - REENTRY LONG en soporte pero DI- >= DI+: DI+={di_plus:.1f}, DI-={di_minus:.1f}")
         elif tipo_breakout == "BREAKOUT_SHORT":
             if soporte <= precio_actual <= resistencia:
                 distancia_resistencia = abs(precio_actual - resistencia)
-                # Verificar solo confirmación ADX/DI (DI- > DI+)
-                adx_confirma = resultado_adx['confirmacion'] and resultado_adx['direccion'] == 'SHORT'
+                # Solo verificar que DI- > DI+ para SHORT
+                di_confirma = di_minus > di_plus
                 
-                if distancia_resistencia <= tolerancia and adx_confirma:
-                    print(f"     ✅ {simbolo} - REENTRY SHORT confirmado! Entrada en resistencia con ADX BAJISTA")
-                    print(f"     📊 ADX: {resultado_adx['adx']:.1f}, DI-: {resultado_adx['di_minus']:.1f}, DI+: {resultado_adx['di_plus']:.1f}")
+                if distancia_resistencia <= tolerancia and di_confirma:
+                    print(f"     ✅ {simbolo} - REENTRY SHORT confirmado! Entrada en resistencia con DI- > DI+")
+                    print(f"     📊 DI-: {di_minus:.1f}, DI+: {di_plus:.1f}")
                     if simbolo in self.breakouts_detectados:
                         del self.breakouts_detectados[simbolo]
                     return "SHORT"
-                elif distancia_resistencia <= tolerancia and not resultado_adx['confirmacion']:
-                    print(f"     ⚠️ {simbolo} - REENTRY SHORT en resistencia pero ADX no confirma: {resultado_adx['mensaje']}")
+                elif distancia_resistencia <= tolerancia and not di_confirma:
+                    print(f"     ⚠️ {simbolo} - REENTRY SHORT en resistencia pero DI+ >= DI-: DI+={di_plus:.1f}, DI-={di_minus:.1f}")
         return None
 
     def calcular_niveles_entrada(self, tipo_operacion, info_canal, precio_actual):
@@ -3141,20 +3146,19 @@ class TradingBot:
         ratio_rr = beneficio / riesgo if riesgo > 0 else 0
         sl_percent = abs((sl - precio_entrada) / precio_entrada) * 100
         tp_percent = abs((tp - precio_entrada) / precio_entrada) * 100
-        # Obtener valores ADX/DI para el mensaje
+        # Obtener valores DI+/DI- para el mensaje
         resultado_adx = self.calcular_adx_di(datos_mercado, threshold=20)
-        adx_mensaje = ""
-        if resultado_adx['adx'] > 0:
-            direccion_adx = "ALCISTA (DI+ > DI-)" if resultado_adx['direccion'] == 'LONG' else "BAJISTA (DI- > DI+)" if resultado_adx['direccion'] == 'SHORT' else "NEUTRAL"
-            adx_mensaje = f"""
-📊 <b>ADX/DI Confirmación:</b>
-📈 <b>ADX:</b> {resultado_adx['adx']:.1f}
+        di_mensaje = ""
+        if resultado_adx['di_plus'] > 0 or resultado_adx['di_minus'] > 0:
+            direccion_di = "ALCISTA (DI+ > DI-)" if resultado_adx['di_plus'] > resultado_adx['di_minus'] else "BAJISTA (DI- > DI+)" if resultado_adx['di_minus'] > resultado_adx['di_plus'] else "NEUTRAL"
+            di_mensaje = f"""
+📊 <b>DI+ / DI- Confirmación:</b>
 🟢 <b>DI+:</b> {resultado_adx['di_plus']:.1f}
 🔴 <b>DI-:</b> {resultado_adx['di_minus']:.1f}
-💪 <b>Dirección:</b> {direccion_adx}
+💪 <b>Dirección:</b> {direccion_di}
 """
         else:
-            adx_mensaje = "\n⚠️ <b>ADX/DI:</b> No disponible\n"
+            di_mensaje = "\n⚠️ <b>DI+ / DI-:</b> No disponible\n"
         
         riesgo = abs(precio_entrada - sl)
         beneficio = abs(tp - precio_entrada)
@@ -3190,8 +3194,8 @@ class TradingBot:
 📏 <b>Ángulo:</b> {info_canal['angulo_tendencia']:.1f}°
 📊 <b>Pearson:</b> {info_canal['coeficiente_pearson']:.3f}
 🎯 <b>R² Score:</b> {info_canal['r2_score']:.3f}
-{adx_mensaje}⏰ <b>Hora:</b> {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
-💡 <b>Estrategia:</b> BREAKOUT + REENTRY con confirmación ADX/DI
+{di_mensaje}⏰ <b>Hora:</b> {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+💡 <b>Estrategia:</b> BREAKOUT + REENTRY con confirmación DI+/DI-
         """
         token = self.config.get('telegram_token')
         chat_ids = self.config.get('telegram_chat_ids', [])
