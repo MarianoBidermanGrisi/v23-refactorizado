@@ -2801,10 +2801,19 @@ class TradingBot:
             df['Resistencia'] = resistencia_values
             df['Soporte'] = soporte_values
             # Calcular ADX/DI para el gráfico
-            adx_data = preparar_datos_adx(df)
-            df['ADX'] = adx_data['adx']
-            df['DI_Plus'] = adx_data['di_plus']
-            df['DI_Minus'] = adx_data['di_minus']
+            # Primero convertir datos del mercado a DataFrame
+            datos_adx = preparar_datos_adx(datos_mercado)
+            if datos_adx is not None and len(datos_adx) >= 14:
+                # Luego calcular ADX/DI usando la función correcta
+                result_adx = calculate_adx_di(datos_adx, length=14, threshold=20)
+                # Asignar valores al DataFrame del gráfico
+                df['ADX'] = result_adx['ADX'].values if 'ADX' in result_adx.columns else 0
+                df['DI_Plus'] = result_adx['DIPlus'].values if 'DIPlus' in result_adx.columns else 0
+                df['DI_Minus'] = result_adx['DIMinus'].values if 'DIMinus' in result_adx.columns else 0
+            else:
+                df['ADX'] = 0
+                df['DI_Plus'] = 0
+                df['DI_Minus'] = 0
             # Preparar plots
             apds = [
                 mpf.make_addplot(df['Resistencia'], color='#5444ff', linestyle='--', width=2, panel=0),
@@ -3673,12 +3682,19 @@ class TradingBot:
             df['Soporte'] = soporte_values
             # Calcular ADX/DI para el gráfico
             try:
-                from adx_di_indicator import calculate_adx_di
-                adx_result = calculate_adx_di(df, length=14, threshold=20)
-                df['ADX'] = adx_result['ADX']
-                df['DIPlus'] = adx_result['DIPlus']
-                df['DIMinus'] = adx_result['DIMinus']
-                adx_disponible = True
+                from adx_di_indicator import calculate_adx_di, preparar_datos_adx
+                # Primero convertir datos del mercado a DataFrame con columnas correctas
+                datos_adx = preparar_datos_adx(datos_mercado)
+                if datos_adx is not None and len(datos_adx) >= 14:
+                    adx_result = calculate_adx_di(datos_adx, length=14, threshold=20)
+                    # Asignar valores al DataFrame del gráfico
+                    df['ADX'] = adx_result['ADX'].values
+                    df['DIPlus'] = adx_result['DIPlus'].values
+                    df['DIMinus'] = adx_result['DIMinus'].values
+                    adx_disponible = True
+                else:
+                    print(f"     ⚠️ Datos insuficientes para ADX/DI")
+                    adx_disponible = False
             except Exception as e:
                 print(f"     ⚠️ Error calculando ADX/DI para gráfico: {e}")
                 adx_disponible = False
