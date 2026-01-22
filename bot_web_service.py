@@ -29,30 +29,6 @@ import logging
 logging.basicConfig(level=logging.INFO, stream=sys.stdout, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-# ---------------------------
-# [INICIO DEL CÓDIGO DEL BOT NUEVO]
-# Copiado íntegro y corregido para ejecución local
-# ---------------------------
-
-# bot_breakout_reentry.py
-# VERSIÓN COMPLETA con estrategia Breakout + Reentry
-import requests
-import time
-import json
-import os
-from datetime import datetime, timedelta
-import numpy as np
-import math
-import csv
-import itertools
-import statistics
-import random
-import matplotlib
-matplotlib.use('Agg')
-import matplotlib.pyplot as plt
-import mplfinance as mpf
-import pandas as pd
-from io import BytesIO
 
 # ---------------------------
 # INDICADORES TÉCNICOS - ADX, DI+, DI-
