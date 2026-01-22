@@ -55,6 +55,263 @@ import pandas as pd
 from io import BytesIO
 
 # ---------------------------
+# INDICADORES TÉCNICOS - ADX, DI+, DI-
+# ---------------------------
+
+def calcular_adx_di(high, low, close, length=14):
+    """
+    Calcula el ADX (Average Directional Index) y los indicadores DI+, DI-.
+    
+    Implementación idéntica a la versión de Pine Script en TradingView.
+    
+    Parámetros:
+    -----------
+    high : array-like
+        Array de precios máximos
+    low : array-like
+        Array de precios mínimos
+    close : array-like
+        Array de precios de cierre
+    length : int, opcional
+        Período para el cálculo (por defecto 14)
+    
+    Retorna:
+    --------
+    dict con las siguientes claves:
+        - 'di_plus': Array con los valores de DI+
+        - 'di_minus': Array con los valores de DI-
+        - 'adx': Array con los valores de ADX
+    """
+    # Si high es un DataFrame o Serie (convertir a arrays)
+    if hasattr(high, 'values'):
+        high = high.values
+    if hasattr(low, 'values'):
+        low = low.values
+    if hasattr(close, 'values'):
+        close = close.values
+    
+    # Convertir a arrays de numpy para mejor rendimiento
+    try:
+        high = np.array(high, dtype=np.float64)
+        low = np.array(low, dtype=np.float64)
+        close = np.array(close, dtype=np.float64)
+    except Exception as e:
+        # Si hay error en la conversión, retornar arrays vacíos
+        n = 100  # Valor por defecto
+        return {
+            'di_plus': np.full(n, np.nan),
+            'di_minus': np.full(n, np.nan),
+            'adx': np.full(n, np.nan)
+        }
+    
+    n = len(high)
+    
+    # Inicializar arrays de resultados
+    true_range = np.zeros(n)
+    directional_movement_plus = np.zeros(n)
+    directional_movement_minus = np.zeros(n)
+    smoothed_true_range = np.zeros(n)
+    smoothed_dm_plus = np.zeros(n)
+    smoothed_dm_minus = np.zeros(n)
+    di_plus = np.zeros(n)
+    di_minus = np.zeros(n)
+    dx = np.zeros(n)
+    adx = np.zeros(n)
+    
+    n = len(high)
+    
+    # Inicializar arrays de resultados
+    true_range = np.zeros(n)
+    directional_movement_plus = np.zeros(n)
+    directional_movement_minus = np.zeros(n)
+    smoothed_true_range = np.zeros(n)
+    smoothed_dm_plus = np.zeros(n)
+    smoothed_dm_minus = np.zeros(n)
+    di_plus = np.zeros(n)
+    di_minus = np.zeros(n)
+    dx = np.zeros(n)
+    adx = np.zeros(n)
+    
+    # Calcular True Range y Directional Movement
+    for i in range(1, n):
+        # TrueRange = max(high-low, |high-close[1]|, |low-close[1]|)
+        true_range[i] = max(
+            high[i] - low[i],
+            abs(high[i] - close[i-1]),
+            abs(low[i] - close[i-1])
+        )
+        
+        # DirectionalMovementPlus = high-nz(high[1]) > nz(low[1])-low ? max(high-nz(high[1]), 0): 0
+        up_move = high[i] - high[i-1]
+        down_move = low[i-1] - low[i]
+        
+        if up_move > down_move and up_move > 0:
+            directional_movement_plus[i] = up_move
+        else:
+            directional_movement_plus[i] = 0
+        
+        # DirectionalMovementMinus = nz(low[1])-low > high-nz(high[1]) ? max(nz(low[1])-low, 0): 0
+        if down_move > up_move and down_move > 0:
+            directional_movement_minus[i] = down_move
+        else:
+            directional_movement_minus[i] = 0
+    
+    # SmoothedTrueRange usando la fórmula de Pine Script
+    for i in range(1, n):
+        if i == 1:
+            # Primera iteración: inicializar con el primer valor
+            smoothed_true_range[i] = true_range[i]
+            smoothed_dm_plus[i] = directional_movement_plus[i]
+            smoothed_dm_minus[i] = directional_movement_minus[i]
+        else:
+            # Aplicar el suavizado recursivo de Pine Script
+            smoothed_true_range[i] = (
+                smoothed_true_range[i-1] - 
+                smoothed_true_range[i-1] / length + 
+                true_range[i]
+            )
+            smoothed_dm_plus[i] = (
+                smoothed_dm_plus[i-1] - 
+                smoothed_dm_plus[i-1] / length + 
+                directional_movement_plus[i]
+            )
+            smoothed_dm_minus[i] = (
+                smoothed_dm_minus[i-1] - 
+                smoothed_dm_minus[i-1] / length + 
+                directional_movement_minus[i]
+            )
+    
+    # Evitar división por cero
+    safe_tr = np.where(smoothed_true_range == 0, np.nan, smoothed_true_range)
+    
+    # DIPlus = SmoothedDirectionalMovementPlus / SmoothedTrueRange * 100
+    di_plus = np.where(
+        np.isnan(safe_tr),
+        np.nan,
+        (smoothed_dm_plus / smoothed_true_range) * 100
+    )
+    
+    # DIMinus = SmoothedDirectionalMovementMinus / SmoothedTrueRange * 100
+    di_minus = np.where(
+        np.isnan(safe_tr),
+        np.nan,
+        (smoothed_dm_minus / smoothed_true_range) * 100
+    )
+    
+    # DX = abs(DIPlus-DIMinus) / (DIPlus+DIMinus)*100
+    di_sum = np.nan_to_num(di_plus) + np.nan_to_num(di_minus)
+    di_diff = np.abs(np.nan_to_num(di_plus) - np.nan_to_num(di_minus))
+    
+    dx = np.where(
+        di_sum == 0,
+        0,
+        (di_diff / di_sum) * 100
+    )
+    
+    # ADX = sma(DX, length) - Media móvil simple de DX
+    for i in range(n):
+        if i < length - 1:
+            adx[i] = np.nan
+        else:
+            adx[i] = np.mean(dx[i-length+1:i+1])
+    
+    return {
+        'di_plus': di_plus,
+        'di_minus': di_minus,
+        'adx': adx
+    }
+
+
+def calcular_adx_di_pandas(df, high_col='High', low_col='Low', close_col='Close', length=14):
+    """
+    Versión optimizada usando pandas DataFrame.
+    
+    Parámetros:
+    -----------
+    df : pd.DataFrame
+        DataFrame con los datos OHLC
+    high_col : str
+        Nombre de la columna de precios máximos (por defecto 'High')
+    low_col : str
+        Nombre de la columna de precios mínimos (por defecto 'Low')
+    close_col : str
+        Nombre de la columna de precios de cierre (por defecto 'Close')
+    length : int
+        Período para el cálculo (por defecto 14)
+    
+    Retorna:
+    --------
+    pd.DataFrame con las columnas DI+, DI-, ADX añadidas
+    """
+    resultado = df.copy()
+    
+    # Calcular True Range
+    resultado['tr'] = np.maximum(
+        resultado[high_col] - resultado[low_col],
+        np.maximum(
+            np.abs(resultado[high_col] - resultado[close_col].shift(1)),
+            np.abs(resultado[low_col] - resultado[close_col].shift(1))
+        )
+    )
+    
+    # Calcular Directional Movement
+    resultado['up_move'] = resultado[high_col] - resultado[high_col].shift(1)
+    resultado['down_move'] = resultado[low_col].shift(1) - resultado[low_col]
+    
+    # DirectionalMovementPlus
+    resultado['dm_plus'] = np.where(
+        (resultado['up_move'] > resultado['down_move']) & (resultado['up_move'] > 0),
+        resultado['up_move'],
+        0
+    )
+    
+    # DirectionalMovementMinus
+    resultado['dm_minus'] = np.where(
+        (resultado['down_move'] > resultado['up_move']) & (resultado['down_move'] > 0),
+        resultado['down_move'],
+        0
+    )
+    
+    # Suavizado usando la fórmula de Pine Script
+    smoothed_tr = np.zeros(len(resultado))
+    smoothed_dm_plus = np.zeros(len(resultado))
+    smoothed_dm_minus = np.zeros(len(resultado))
+    
+    for i in range(len(resultado)):
+        if i == 0:
+            smoothed_tr[i] = resultado['tr'].iloc[i]
+            smoothed_dm_plus[i] = resultado['dm_plus'].iloc[i]
+            smoothed_dm_minus[i] = resultado['dm_minus'].iloc[i]
+        else:
+            smoothed_tr[i] = smoothed_tr[i-1] - smoothed_tr[i-1]/length + resultado['tr'].iloc[i]
+            smoothed_dm_plus[i] = smoothed_dm_plus[i-1] - smoothed_dm_plus[i-1]/length + resultado['dm_plus'].iloc[i]
+            smoothed_dm_minus[i] = smoothed_dm_minus[i-1] - smoothed_dm_minus[i-1]/length + resultado['dm_minus'].iloc[i]
+    
+    resultado['smoothed_tr'] = smoothed_tr
+    resultado['smoothed_dm_plus'] = smoothed_dm_plus
+    resultado['smoothed_dm_minus'] = smoothed_dm_minus
+    
+    # Calcular DI+ y DI-
+    resultado['DI+'] = (resultado['smoothed_dm_plus'] / resultado['smoothed_tr']) * 100
+    resultado['DI-'] = (resultado['smoothed_dm_minus'] / resultado['smoothed_tr']) * 100
+    
+    # Calcular DX
+    di_sum = resultado['DI+'] + resultado['DI-']
+    di_diff = np.abs(resultado['DI+'] - resultado['DI-'])
+    resultado['DX'] = (di_diff / di_sum) * 100
+    
+    # Calcular ADX como SMA de DX
+    resultado['ADX'] = resultado['DX'].rolling(window=length).mean()
+    
+    # Limpiar columnas intermedias
+    resultado.drop(columns=['tr', 'up_move', 'down_move', 'dm_plus', 'dm_minus', 
+                           'smoothed_tr', 'smoothed_dm_plus', 'smoothed_dm_minus', 'DX'], 
+                   inplace=True)
+    
+    return resultado
+
+
+# ---------------------------
 # OPTIMIZADOR IA
 # ---------------------------
 class OptimizadorIA:
@@ -2827,6 +3084,20 @@ class TradingBot:
                     stoch_d_values.append(d)
             df['Stoch_K'] = k_smoothed
             df['Stoch_D'] = stoch_d_values
+            
+            # =====================================================
+            # NUEVO: Calcular ADX, DI+ y DI- usando la función importada
+            # =====================================================
+            adx_results = calcular_adx_di(
+                df['High'].values, 
+                df['Low'].values, 
+                df['Close'].values, 
+                length=14
+            )
+            df['ADX'] = adx_results['adx']
+            df['DI+'] = adx_results['di_plus']
+            df['DI-'] = adx_results['di_minus']
+            
             # Preparar plots
             apds = [
                 mpf.make_addplot(df['Resistencia'], color='#5444ff', linestyle='--', width=2, panel=0),
@@ -2849,6 +3120,17 @@ class TradingBot:
             oversold = [20] * len(df)
             apds.append(mpf.make_addplot(overbought, color="#E7E4E4", linestyle='--', width=0.8, panel=1, alpha=0.5))
             apds.append(mpf.make_addplot(oversold, color="#E9E4E4", linestyle='--', width=0.8, panel=1, alpha=0.5))
+            
+            # =====================================================
+            # NUEVO: Añadir panel de ADX, DI+ y DI- (Panel 2)
+            # =====================================================
+            apds.append(mpf.make_addplot(df['DI+'], color='#00FF00', width=1.5, panel=2, ylabel='ADX/DI'))
+            apds.append(mpf.make_addplot(df['DI-'], color='#FF0000', width=1.5, panel=2))
+            apds.append(mpf.make_addplot(df['ADX'], color='#000080', width=2, panel=2))  # Navy color
+            # Línea threshold en ADX
+            adx_threshold = [20] * len(df)
+            apds.append(mpf.make_addplot(adx_threshold, color="#808080", linestyle='--', width=0.8, panel=2, alpha=0.5))
+            
             # Crear gráfico
             fig, axes = mpf.plot(df, type='candle', style='nightclouds',
                                title=f'{simbolo} | {titulo_extra} | {config_optima["timeframe"]} | ⏳ ESPERANDO REENTRY',
@@ -2856,10 +3138,16 @@ class TradingBot:
                                addplot=apds,
                                volume=False,
                                returnfig=True,
-                               figsize=(14, 10),
-                               panel_ratios=(3, 1))
+                               figsize=(14, 12),
+                               panel_ratios=(3, 1, 1))
             axes[2].set_ylim([0, 100])
             axes[2].grid(True, alpha=0.3)
+            # Configurar panel ADX (axes[3])
+            if len(axes) > 3:
+                axes[3].set_ylim([0, 100])
+                axes[3].grid(True, alpha=0.3)
+                axes[3].set_ylabel('ADX/DI', fontsize=8)
+            
             buf = BytesIO()
             plt.savefig(buf, format='png', dpi=100, bbox_inches='tight', facecolor='#1a1a1a')
             buf.seek(0)
@@ -3627,6 +3915,20 @@ class TradingBot:
                     stoch_d_values.append(d)
             df['Stoch_K'] = k_smoothed
             df['Stoch_D'] = stoch_d_values
+            
+            # =====================================================
+            # NUEVO: Calcular ADX, DI+ y DI- usando la función importada
+            # =====================================================
+            adx_results = calcular_adx_di(
+                df['High'].values, 
+                df['Low'].values, 
+                df['Close'].values, 
+                length=14
+            )
+            df['ADX'] = adx_results['adx']
+            df['DI+'] = adx_results['di_plus']
+            df['DI-'] = adx_results['di_minus']
+            
             apds = [
                 mpf.make_addplot(df['Resistencia'], color='#5444ff', linestyle='--', width=2, panel=0),
                 mpf.make_addplot(df['Soporte'], color="#5444ff", linestyle='--', width=2, panel=0),
@@ -3644,16 +3946,33 @@ class TradingBot:
             oversold = [20] * len(df)
             apds.append(mpf.make_addplot(overbought, color="#E7E4E4", linestyle='--', width=0.8, panel=1, alpha=0.5))
             apds.append(mpf.make_addplot(oversold, color="#E9E4E4", linestyle='--', width=0.8, panel=1, alpha=0.5))
+            
+            # =====================================================
+            # NUEVO: Añadir panel de ADX, DI+ y DI- (Panel 2)
+            # =====================================================
+            apds.append(mpf.make_addplot(df['DI+'], color='#00FF00', width=1.5, panel=2, ylabel='ADX/DI'))
+            apds.append(mpf.make_addplot(df['DI-'], color='#FF0000', width=1.5, panel=2))
+            apds.append(mpf.make_addplot(df['ADX'], color='#000080', width=2, panel=2))  # Navy color
+            # Línea threshold en ADX
+            adx_threshold = [20] * len(df)
+            apds.append(mpf.make_addplot(adx_threshold, color="#808080", linestyle='--', width=0.8, panel=2, alpha=0.5))
+            
             fig, axes = mpf.plot(df, type='candle', style='nightclouds',
                                title=f'{simbolo} | {tipo_operacion} | {config_optima["timeframe"]} | BITGET FUTUROS + Breakout+Reentry',
                                ylabel='Precio',
                                addplot=apds,
                                volume=False,
                                returnfig=True,
-                               figsize=(14, 10),
-                               panel_ratios=(3, 1))
+                               figsize=(14, 12),
+                               panel_ratios=(3, 1, 1))
             axes[2].set_ylim([0, 100])
             axes[2].grid(True, alpha=0.3)
+            # Configurar panel ADX (axes[3])
+            if len(axes) > 3:
+                axes[3].set_ylim([0, 100])
+                axes[3].grid(True, alpha=0.3)
+                axes[3].set_ylabel('ADX/DI', fontsize=8)
+            
             buf = BytesIO()
             plt.savefig(buf, format='png', dpi=100, bbox_inches='tight', facecolor='#1a1a1a')
             buf.seek(0)
