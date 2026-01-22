@@ -25,14 +25,6 @@ from flask import Flask, request, jsonify
 import threading
 import logging
 
-# Importar indicador ADX/DI para confirmación de tendencias
-try:
-    from adx_di_indicator import calculate_adx_di, get_adx_confirmation, preparar_datos_adx
-    ADX_INDICATOR_DISPONIBLE = True
-except ImportError:
-    ADX_INDICATOR_DISPONIBLE = False
-    print("⚠️ ADX/DI indicator no disponible")
-
 # Configurar logging básico
 logging.basicConfig(level=logging.INFO, stream=sys.stdout, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
@@ -61,6 +53,232 @@ import matplotlib.pyplot as plt
 import mplfinance as mpf
 import pandas as pd
 from io import BytesIO
+
+# ---------------------------
+# INDICADORES TÉCNICOS - ADX, DI+, DI-
+# ---------------------------
+
+def calcular_adx_di(high, low, close, length=14):
+    """
+    Calcula el ADX (Average Directional Index) y los indicadores DI+, DI-.
+    
+    Implementación idéntica a la versión de Pine Script en TradingView.
+    
+    Parámetros:
+    -----------
+    high : array-like
+        Array de precios máximos
+    low : array-like
+        Array de precios mínimos
+    close : array-like
+        Array de precios de cierre
+    length : int, opcional
+        Período para el cálculo (por defecto 14)
+    
+    Retorna:
+    --------
+    dict con las siguientes claves:
+        - 'di_plus': Array con los valores de DI+
+        - 'di_minus': Array con los valores de DI-
+        - 'adx': Array con los valores de ADX
+    """
+    # Convertir a arrays de numpy para mejor rendimiento
+    high = np.array(high, dtype=np.float64)
+    low = np.array(low, dtype=np.float64)
+    close = np.array(close, dtype=np.float64)
+    
+    n = len(high)
+    
+    # Inicializar arrays de resultados
+    true_range = np.zeros(n)
+    directional_movement_plus = np.zeros(n)
+    directional_movement_minus = np.zeros(n)
+    smoothed_true_range = np.zeros(n)
+    smoothed_dm_plus = np.zeros(n)
+    smoothed_dm_minus = np.zeros(n)
+    di_plus = np.zeros(n)
+    di_minus = np.zeros(n)
+    dx = np.zeros(n)
+    adx = np.zeros(n)
+    
+    # Calcular True Range y Directional Movement
+    for i in range(1, n):
+        # TrueRange = max(high-low, |high-close[1]|, |low-close[1]|)
+        true_range[i] = max(
+            high[i] - low[i],
+            abs(high[i] - close[i-1]),
+            abs(low[i] - close[i-1])
+        )
+        
+        # DirectionalMovementPlus = high-nz(high[1]) > nz(low[1])-low ? max(high-nz(high[1]), 0): 0
+        up_move = high[i] - high[i-1]
+        down_move = low[i-1] - low[i]
+        
+        if up_move > down_move and up_move > 0:
+            directional_movement_plus[i] = up_move
+        else:
+            directional_movement_plus[i] = 0
+        
+        # DirectionalMovementMinus = nz(low[1])-low > high-nz(high[1]) ? max(nz(low[1])-low, 0): 0
+        if down_move > up_move and down_move > 0:
+            directional_movement_minus[i] = down_move
+        else:
+            directional_movement_minus[i] = 0
+    
+    # SmoothedTrueRange usando la fórmula de Pine Script
+    for i in range(1, n):
+        if i == 1:
+            # Primera iteración: inicializar con el primer valor
+            smoothed_true_range[i] = true_range[i]
+            smoothed_dm_plus[i] = directional_movement_plus[i]
+            smoothed_dm_minus[i] = directional_movement_minus[i]
+        else:
+            # Aplicar el suavizado recursivo de Pine Script
+            smoothed_true_range[i] = (
+                smoothed_true_range[i-1] - 
+                smoothed_true_range[i-1] / length + 
+                true_range[i]
+            )
+            smoothed_dm_plus[i] = (
+                smoothed_dm_plus[i-1] - 
+                smoothed_dm_plus[i-1] / length + 
+                directional_movement_plus[i]
+            )
+            smoothed_dm_minus[i] = (
+                smoothed_dm_minus[i-1] - 
+                smoothed_dm_minus[i-1] / length + 
+                directional_movement_minus[i]
+            )
+    
+    # Evitar división por cero
+    safe_tr = np.where(smoothed_true_range == 0, np.nan, smoothed_true_range)
+    
+    # DIPlus = SmoothedDirectionalMovementPlus / SmoothedTrueRange * 100
+    di_plus = np.where(
+        np.isnan(safe_tr),
+        np.nan,
+        (smoothed_dm_plus / smoothed_true_range) * 100
+    )
+    
+    # DIMinus = SmoothedDirectionalMovementMinus / SmoothedTrueRange * 100
+    di_minus = np.where(
+        np.isnan(safe_tr),
+        np.nan,
+        (smoothed_dm_minus / smoothed_true_range) * 100
+    )
+    
+    # DX = abs(DIPlus-DIMinus) / (DIPlus+DIMinus)*100
+    di_sum = np.nan_to_num(di_plus) + np.nan_to_num(di_minus)
+    di_diff = np.abs(np.nan_to_num(di_plus) - np.nan_to_num(di_minus))
+    
+    dx = np.where(
+        di_sum == 0,
+        0,
+        (di_diff / di_sum) * 100
+    )
+    
+    # ADX = sma(DX, length) - Media móvil simple de DX
+    for i in range(n):
+        if i < length - 1:
+            adx[i] = np.nan
+        else:
+            adx[i] = np.mean(dx[i-length+1:i+1])
+    
+    return {
+        'di_plus': di_plus,
+        'di_minus': di_minus,
+        'adx': adx
+    }
+
+
+def calcular_adx_di_pandas(df, high_col='high', low_col='low', close_col='close', length=14):
+    """
+    Versión optimizada usando pandas DataFrame.
+    
+    Parámetros:
+    -----------
+    df : pd.DataFrame
+        DataFrame con los datos OHLC
+    high_col : str
+        Nombre de la columna de precios máximos
+    low_col : str
+        Nombre de la columna de precios mínimos
+    close_col : str
+        Nombre de la columna de precios de cierre
+    length : int
+        Período para el cálculo (por defecto 14)
+    
+    Retorna:
+    --------
+    pd.DataFrame con las columnas DI+, DI-, ADX añadidas
+    """
+    resultado = df.copy()
+    
+    # Calcular True Range
+    resultado['tr'] = np.maximum(
+        resultado[high_col] - resultado[low_col],
+        np.maximum(
+            np.abs(resultado[high_col] - resultado[close_col].shift(1)),
+            np.abs(resultado[low_col] - resultado[close_col].shift(1))
+        )
+    )
+    
+    # Calcular Directional Movement
+    resultado['up_move'] = resultado[high_col] - resultado[high_col].shift(1)
+    resultado['down_move'] = resultado[low_col].shift(1) - resultado[low_col]
+    
+    # DirectionalMovementPlus
+    resultado['dm_plus'] = np.where(
+        (resultado['up_move'] > resultado['down_move']) & (resultado['up_move'] > 0),
+        resultado['up_move'],
+        0
+    )
+    
+    # DirectionalMovementMinus
+    resultado['dm_minus'] = np.where(
+        (resultado['down_move'] > resultado['up_move']) & (resultado['down_move'] > 0),
+        resultado['down_move'],
+        0
+    )
+    
+    # Suavizado usando la fórmula de Pine Script
+    smoothed_tr = np.zeros(len(resultado))
+    smoothed_dm_plus = np.zeros(len(resultado))
+    smoothed_dm_minus = np.zeros(len(resultado))
+    
+    for i in range(len(resultado)):
+        if i == 0:
+            smoothed_tr[i] = resultado['tr'].iloc[i]
+            smoothed_dm_plus[i] = resultado['dm_plus'].iloc[i]
+            smoothed_dm_minus[i] = resultado['dm_minus'].iloc[i]
+        else:
+            smoothed_tr[i] = smoothed_tr[i-1] - smoothed_tr[i-1]/length + resultado['tr'].iloc[i]
+            smoothed_dm_plus[i] = smoothed_dm_plus[i-1] - smoothed_dm_plus[i-1]/length + resultado['dm_plus'].iloc[i]
+            smoothed_dm_minus[i] = smoothed_dm_minus[i-1] - smoothed_dm_minus[i-1]/length + resultado['dm_minus'].iloc[i]
+    
+    resultado['smoothed_tr'] = smoothed_tr
+    resultado['smoothed_dm_plus'] = smoothed_dm_plus
+    resultado['smoothed_dm_minus'] = smoothed_dm_minus
+    
+    # Calcular DI+ y DI-
+    resultado['DI+'] = (resultado['smoothed_dm_plus'] / resultado['smoothed_tr']) * 100
+    resultado['DI-'] = (resultado['smoothed_dm_minus'] / resultado['smoothed_tr']) * 100
+    
+    # Calcular DX
+    di_sum = resultado['DI+'] + resultado['DI-']
+    di_diff = np.abs(resultado['DI+'] - resultado['DI-'])
+    resultado['DX'] = (di_diff / di_sum) * 100
+    
+    # Calcular ADX como SMA de DX
+    resultado['ADX'] = resultado['DX'].rolling(window=length).mean()
+    
+    # Limpiar columnas intermedias
+    resultado.drop(columns=['tr', 'up_move', 'down_move', 'dm_plus', 'dm_minus', 
+                           'smoothed_tr', 'smoothed_dm_plus', 'smoothed_dm_minus', 'DX'], 
+                   inplace=True)
+    
+    return resultado
+
 
 # ---------------------------
 # OPTIMIZADOR IA
@@ -1537,7 +1755,7 @@ class TradingBot:
         self.estado_file = config.get('estado_file', 'estado_bot.json')
         self.cargar_estado()
         
-        # Inicializar persistencia avanzada PRIMERO (antes de cualquier uso de senales_enviadas)
+        # Inicializar persistencia avanzada
         self.inicializar_persistencia_avanzada()
         
         # Inicializar cliente Bitget FUTUROS con credenciales REALES
@@ -1555,9 +1773,7 @@ class TradingBot:
                 logger.warning("⚠️ No se pudieron verificar las credenciales de BITGET FUTUROS")
         
         # LIMPIEZA INICIAL: Liberar símbolos bloquados si no hay posiciones activas
-        # Esta línea debe estar DESPUÉS de inicializar_persistencia_avanzada()
-        if self.bitget_client:
-            self.limpiar_bloqueos_iniciales()
+        self.limpiar_bloqueos_iniciales()
         
         # Configuración de operaciones automáticas
         self.ejecutar_operaciones_automaticas = config.get('ejecutar_operaciones_automaticas', False)
@@ -2432,6 +2648,8 @@ class TradingBot:
                 'nivel_fuerza': operacion.get('nivel_fuerza', 1),
                 'timeframe_utilizado': operacion.get('timeframe_utilizado', 'N/A'),
                 'velas_utilizadas': operacion.get('velas_utilizadas', 0),
+                'stoch_k': operacion.get('stoch_k', 0),
+                'stoch_d': operacion.get('stoch_d', 0),
                 'breakout_usado': operacion.get('breakout_usado', False),
                 'operacion_ejecutada': operacion.get('operacion_ejecutada', False),
                 'reason': reason,
@@ -2641,7 +2859,7 @@ class TradingBot:
         pearson, angulo_tendencia = self.calcular_pearson_y_angulo(tiempos_reg, cierres)
         fuerza_texto, nivel_fuerza = self.clasificar_fuerza_tendencia(angulo_tendencia)
         direccion = self.determinar_direccion_tendencia(angulo_tendencia, 1)
-
+        stoch_k, stoch_d = self.calcular_stochastic(datos_mercado)
         precio_medio = (resistencia_superior + soporte_inferior) / 2
         ancho_canal_absoluto = resistencia_superior - soporte_inferior
         ancho_canal_porcentual = (ancho_canal_absoluto / precio_medio) * 100
@@ -2663,7 +2881,8 @@ class TradingBot:
             'r2_score': self.calcular_r2(cierres, tiempos_reg, pendiente_cierre, intercepto_cierre),
             'pendiente_resistencia': pendiente_max,
             'pendiente_soporte': pendiente_min,
-
+            'stoch_k': stoch_k,
+            'stoch_d': stoch_d,
             'timeframe': datos_mercado.get('timeframe', 'N/A'),
             'num_velas': candle_period
         }
@@ -2802,43 +3021,52 @@ class TradingBot:
                 soporte_values.append(sop)
             df['Resistencia'] = resistencia_values
             df['Soporte'] = soporte_values
-            # Calcular ADX/DI para el gráfico
-            # IMPORTANTE: Usar solo las velas necesarias para el gráfico (evitar mismatch de longitudes)
-            num_velas_grafico = len(df)
+            # Calcular Stochastic
+            period = 14
+            k_period = 3
+            d_period = 3
+            stoch_k_values = []
+            for i in range(len(df)):
+                if i < period - 1:
+                    stoch_k_values.append(50)
+                else:
+                    highest_high = df['High'].iloc[i-period+1:i+1].max()
+                    lowest_low = df['Low'].iloc[i-period+1:i+1].min()
+                    if highest_high == lowest_low:
+                        k = 50
+                    else:
+                        k = 100 * (df['Close'].iloc[i] - lowest_low) / (highest_high - lowest_low)
+                    stoch_k_values.append(k)
+            k_smoothed = []
+            for i in range(len(stoch_k_values)):
+                if i < k_period - 1:
+                    k_smoothed.append(stoch_k_values[i])
+                else:
+                    k_avg = sum(stoch_k_values[i-k_period+1:i+1]) / k_period
+                    k_smoothed.append(k_avg)
+            stoch_d_values = []
+            for i in range(len(k_smoothed)):
+                if i < d_period - 1:
+                    stoch_d_values.append(k_smoothed[i])
+                else:
+                    d = sum(k_smoothed[i-d_period+1:i+1]) / d_period
+                    stoch_d_values.append(d)
+            df['Stoch_K'] = k_smoothed
+            df['Stoch_D'] = stoch_d_values
             
-            # CORRECCIÓN: Crear el formato correcto de datos para ADX desde el DataFrame df
-            # preparar_datos_adx espera un dict con 'maximos', 'minimos', 'cierres'
-            # Las columnas en el DataFrame pueden ser 'high', 'low', 'close' (minúsculas)
-            datos_adx_formato = {
-                'maximos': df['high'].tolist(),
-                'minimos': df['low'].tolist(),
-                'cierres': df['close'].tolist()
-            }
+            # =====================================================
+            # NUEVO: Calcular ADX, DI+ y DI- usando la función importada
+            # =====================================================
+            adx_results = calcular_adx_di(
+                df['High'].values, 
+                df['Low'].values, 
+                df['Close'].values, 
+                length=14
+            )
+            df['ADX'] = adx_results['adx']
+            df['DI+'] = adx_results['di_plus']
+            df['DI-'] = adx_results['di_minus']
             
-            datos_adx = preparar_datos_adx(datos_adx_formato)
-            if datos_adx is not None and len(datos_adx) >= 14:
-                # Recortar datos_adx para que tenga el mismo número de velas que el gráfico
-                # Esto evita el error "Length of values does not match length of index"
-                datos_adx_recortado = datos_adx.iloc[-num_velas_grafico:].copy()
-                
-                # Calcular ADX/DI con los datos recortados
-                result_adx = calculate_adx_di(datos_adx_recortado, length=14, threshold=20)
-                
-                # Asignar valores al DataFrame del gráfico (ahora deben tener la misma longitud)
-                df['ADX'] = result_adx['ADX'].values if 'ADX' in result_adx.columns else 0
-                df['DIPlus'] = result_adx['DIPlus'].values if 'DIPlus' in result_adx.columns else 0
-                df['DIMinus'] = result_adx['DIMinus'].values if 'DIMinus' in result_adx.columns else 0
-                adx_disponible = True
-                
-                # DEBUG: Mostrar valores de ADX para diagnóstico
-                print(f"     🔍 DEBUG ADX - df.shape: {df.shape}, ADX último: {df['ADX'].iloc[-1]:.4f}, DI+: {df['DIPlus'].iloc[-1]:.4f}, DI-: {df['DIMinus'].iloc[-1]:.4f}")
-            else:
-                print(f"     ⚠️ Datos insuficientes para ADX/DI en gráfico de breakout: datos_adx={type(datos_adx)}, len={len(datos_adx) if datos_adx is not None else 'None'}")
-                adx_disponible = False
-                # INICIALIZAR COLUMNAS CON CEROS PARA EVITAR ERRORES
-                df['ADX'] = 0
-                df['DIPlus'] = 0
-                df['DIMinus'] = 0
             # Preparar plots
             apds = [
                 mpf.make_addplot(df['Resistencia'], color='#5444ff', linestyle='--', width=2, panel=0),
@@ -2854,12 +3082,24 @@ class TradingBot:
                 color_breakout = '#D68F01'
                 titulo_extra = "📉 RUPTURA BAJISTA"
             apds.append(mpf.make_addplot(breakout_line, color=color_breakout, linestyle='-', width=3, panel=0, alpha=0.8))
+            # Stochastic
+            apds.append(mpf.make_addplot(df['Stoch_K'], color='#00BFFF', width=1.5, panel=1, ylabel='Stochastic'))
+            apds.append(mpf.make_addplot(df['Stoch_D'], color='#FF6347', width=1.5, panel=1))
+            overbought = [80] * len(df)
+            oversold = [20] * len(df)
+            apds.append(mpf.make_addplot(overbought, color="#E7E4E4", linestyle='--', width=0.8, panel=1, alpha=0.5))
+            apds.append(mpf.make_addplot(oversold, color="#E9E4E4", linestyle='--', width=0.8, panel=1, alpha=0.5))
             
-            # Solo agregar ADX/DI al gráfico si está disponible
-            if adx_disponible:
-                apds.append(mpf.make_addplot(df['ADX'], color='#FFFF00', width=1.5, panel=1, ylabel='ADX/DI'))
-                apds.append(mpf.make_addplot(df['DIPlus'], color='#00FF00', width=1.2, panel=1))
-                apds.append(mpf.make_addplot(df['DIMinus'], color='#FF0000', width=1.2, panel=1))
+            # =====================================================
+            # NUEVO: Añadir panel de ADX, DI+ y DI- (Panel 2)
+            # =====================================================
+            apds.append(mpf.make_addplot(df['DI+'], color='#00FF00', width=1.5, panel=2, ylabel='ADX/DI'))
+            apds.append(mpf.make_addplot(df['DI-'], color='#FF0000', width=1.5, panel=2))
+            apds.append(mpf.make_addplot(df['ADX'], color='#000080', width=2, panel=2))  # Navy color
+            # Línea threshold en ADX
+            adx_threshold = [20] * len(df)
+            apds.append(mpf.make_addplot(adx_threshold, color="#808080", linestyle='--', width=0.8, panel=2, alpha=0.5))
+            
             # Crear gráfico
             fig, axes = mpf.plot(df, type='candle', style='nightclouds',
                                title=f'{simbolo} | {titulo_extra} | {config_optima["timeframe"]} | ⏳ ESPERANDO REENTRY',
@@ -2867,14 +3107,16 @@ class TradingBot:
                                addplot=apds,
                                volume=False,
                                returnfig=True,
-                               figsize=(14, 10),
-                               panel_ratios=(3, 1))
-
+                               figsize=(14, 12),
+                               panel_ratios=(3, 1, 1))
+            axes[2].set_ylim([0, 100])
             axes[2].grid(True, alpha=0.3)
+            # Configurar panel ADX (axes[3])
+            if len(axes) > 3:
+                axes[3].set_ylim([0, 100])
+                axes[3].grid(True, alpha=0.3)
+                axes[3].set_ylabel('ADX/DI', fontsize=8)
             
-            # Forzar escala correcta para ADX/DI (0-100)
-            if adx_disponible and len(df) > 0:
-                axes[2].set_ylim(0, 100)
             buf = BytesIO()
             plt.savefig(buf, format='png', dpi=100, bbox_inches='tight', facecolor='#1a1a1a')
             buf.seek(0)
@@ -2909,22 +3151,19 @@ class TradingBot:
             if tiempo_desde_ultimo < 115:
                 print(f"     ⏰ {simbolo} - Breakout detectado recientemente ({tiempo_desde_ultimo:.1f} min), omitiendo...")
                 return None
-        # LÓGICA ORIGINAL - Estrategia de FALSA RUPTURA:
-        # Canal ALCISTA: Precio rompe soporte hacia ABAJO → BREAKOUT_LONG (falsa ruptura)
-        # Canal BAJISTA: Precio rompe resistencia hacia ARRIBA → BREAKOUT_SHORT (falsa ruptura)
-        # Luego se espera reentry para entrar en dirección de la tendencia original
+        # CORREGIR LÓGICA DE DETECCIÓN DE BREAKOUT
         if direccion == "🟢 ALCISTA" and nivel_fuerza >= 2:
-            if precio_cierre < soporte:  # Precio rompió hacia abajo el soporte (falsa ruptura)
-                print(f"     🚀 {simbolo} - BREAKOUT LONG (falsa ruptura): {precio_cierre:.8f} < Soporte: {soporte:.8f}")
+            if precio_cierre < soporte:  # Precio rompió hacia abajo el soporte
+                print(f"     🚀 {simbolo} - BREAKOUT LONG: {precio_cierre:.8f} < Soporte: {soporte:.8f}")
                 return "BREAKOUT_LONG"
         elif direccion == "🔴 BAJISTA" and nivel_fuerza >= 2:
-            if precio_cierre > resistencia:  # Precio rompió hacia arriba la resistencia (falsa ruptura)
-                print(f"     📉 {simbolo} - BREAKOUT SHORT (falsa ruptura): {precio_cierre:.8f} > Resistencia: {resistencia:.8f}")
+            if precio_cierre > resistencia:  # Precio rompió hacia arriba la resistencia
+                print(f"     📉 {simbolo} - BREAKOUT SHORT: {precio_cierre:.8f} > Resistencia: {resistencia:.8f}")
                 return "BREAKOUT_SHORT"
         return None
 
     def detectar_reentry(self, simbolo, info_canal, datos_mercado):
-        """Detecta si el precio ha REINGRESADO al canal con confirmación DI+ > DI- o DI- > DI+"""
+        """Detecta si el precio ha REINGRESADO al canal"""
         if simbolo not in self.esperando_reentry:
             return None
         breakout_info = self.esperando_reentry[simbolo]
@@ -2940,44 +3179,25 @@ class TradingBot:
         precio_actual = datos_mercado['precio_actual']
         resistencia = info_canal['resistencia']
         soporte = info_canal['soporte']
+        stoch_k = info_canal['stoch_k']
+        stoch_d = info_canal['stoch_d']
         tolerancia = 0.001 * precio_actual
-        
-        # Obtener valores DI+ y DI-
-        resultado_adx = self.calcular_adx_di(datos_mercado, threshold=20)
-        di_plus = resultado_adx['di_plus']
-        di_minus = resultado_adx['di_minus']
-        
-        # Confirmación SOLO con DI+ > DI- o DI- > DI+
-        direccion_confirmada = 'LONG' if di_plus > di_minus else 'SHORT' if di_minus > di_plus else 'NEUTRAL'
-        
         if tipo_breakout == "BREAKOUT_LONG":
             if soporte <= precio_actual <= resistencia:
                 distancia_soporte = abs(precio_actual - soporte)
-                # Solo verificar que DI+ > DI- para LONG
-                di_confirma = di_plus > di_minus
-                
-                if distancia_soporte <= tolerancia and di_confirma:
-                    print(f"     ✅ {simbolo} - REENTRY LONG confirmado! Entrada en soporte con DI+ > DI-")
-                    print(f"     📊 DI+: {di_plus:.1f}, DI-: {di_minus:.1f}")
+                if distancia_soporte <= tolerancia and stoch_k > stoch_d and stoch_d <= 20:
+                    print(f"     ✅ {simbolo} - REENTRY LONG confirmado! Entrada en soporte con Stoch oversold")
                     if simbolo in self.breakouts_detectados:
                         del self.breakouts_detectados[simbolo]
                     return "LONG"
-                elif distancia_soporte <= tolerancia and not di_confirma:
-                    print(f"     ⚠️ {simbolo} - REENTRY LONG en soporte pero DI- >= DI+: DI+={di_plus:.1f}, DI-={di_minus:.1f}")
         elif tipo_breakout == "BREAKOUT_SHORT":
             if soporte <= precio_actual <= resistencia:
                 distancia_resistencia = abs(precio_actual - resistencia)
-                # Solo verificar que DI- > DI+ para SHORT
-                di_confirma = di_minus > di_plus
-                
-                if distancia_resistencia <= tolerancia and di_confirma:
-                    print(f"     ✅ {simbolo} - REENTRY SHORT confirmado! Entrada en resistencia con DI- > DI+")
-                    print(f"     📊 DI-: {di_minus:.1f}, DI+: {di_plus:.1f}")
+                if distancia_resistencia <= tolerancia and stoch_k < stoch_d and stoch_d >= 80:
+                    print(f"     ✅ {simbolo} - REENTRY SHORT confirmado! Entrada en resistencia con Stoch overbought")
                     if simbolo in self.breakouts_detectados:
                         del self.breakouts_detectados[simbolo]
                     return "SHORT"
-                elif distancia_resistencia <= tolerancia and not di_confirma:
-                    print(f"     ⚠️ {simbolo} - REENTRY SHORT en resistencia pero DI+ >= DI-: DI+={di_plus:.1f}, DI-={di_minus:.1f}")
         return None
 
     def calcular_niveles_entrada(self, tipo_operacion, info_canal, precio_actual):
@@ -3046,7 +3266,13 @@ class TradingBot:
                 if not info_canal:
                     print(f"   ❌ {simbolo} - Error calculando canal")
                     continue
-
+                estado_stoch = ""
+                if info_canal['stoch_k'] <= 30:
+                    estado_stoch = "📉 OVERSOLD"
+                elif info_canal['stoch_k'] >= 70:
+                    estado_stoch = "📈 OVERBOUGHT"
+                else:
+                    estado_stoch = "➖ NEUTRO"
                 precio_actual = datos_mercado['precio_actual']
                 resistencia = info_canal['resistencia']
                 soporte = info_canal['soporte']
@@ -3059,7 +3285,7 @@ class TradingBot:
                 print(
     f"📊 {simbolo} - {config_optima['timeframe']} - {config_optima['num_velas']}v | "
     f"{info_canal['direccion']} ({info_canal['angulo_tendencia']:.1f}° - {info_canal['fuerza_texto']}) | "
-    f"Ancho: {info_canal['ancho_canal_porcentual']:.1f}% | "
+    f"Ancho: {info_canal['ancho_canal_porcentual']:.1f}% - Stoch: {info_canal['stoch_k']:.1f}/{info_canal['stoch_d']:.1f} {estado_stoch} | "
     f"Precio: {posicion}"
                 )
                 if (info_canal['nivel_fuerza'] < 2 or 
@@ -3150,25 +3376,7 @@ class TradingBot:
         ratio_rr = beneficio / riesgo if riesgo > 0 else 0
         sl_percent = abs((sl - precio_entrada) / precio_entrada) * 100
         tp_percent = abs((tp - precio_entrada) / precio_entrada) * 100
-        # Obtener valores DI+/DI- para el mensaje
-        resultado_adx = self.calcular_adx_di(datos_mercado, threshold=20)
-        di_mensaje = ""
-        if resultado_adx['di_plus'] > 0 or resultado_adx['di_minus'] > 0:
-            direccion_di = "ALCISTA (DI+ > DI-)" if resultado_adx['di_plus'] > resultado_adx['di_minus'] else "BAJISTA (DI- > DI+)" if resultado_adx['di_minus'] > resultado_adx['di_plus'] else "NEUTRAL"
-            di_mensaje = f"""
-📊 <b>DI+ / DI- Confirmación:</b>
-🟢 <b>DI+:</b> {resultado_adx['di_plus']:.1f}
-🔴 <b>DI-:</b> {resultado_adx['di_minus']:.1f}
-💪 <b>Dirección:</b> {direccion_di}
-"""
-        else:
-            di_mensaje = "\n⚠️ <b>DI+ / DI-:</b> No disponible\n"
-        
-        riesgo = abs(precio_entrada - sl)
-        beneficio = abs(tp - precio_entrada)
-        ratio_rr = beneficio / riesgo if riesgo > 0 else 0
-        sl_percent = abs((sl - precio_entrada) / precio_entrada) * 100
-        tp_percent = abs((tp - precio_entrada) / precio_entrada) * 100
+        stoch_estado = "📉 SOBREVENTA" if tipo_operacion == "LONG" else "📈 SOBRECOMPRA"
         breakout_texto = ""
         if breakout_info:
             tiempo_breakout = (datetime.now() - breakout_info['timestamp']).total_seconds() / 60
@@ -3198,8 +3406,11 @@ class TradingBot:
 📏 <b>Ángulo:</b> {info_canal['angulo_tendencia']:.1f}°
 📊 <b>Pearson:</b> {info_canal['coeficiente_pearson']:.3f}
 🎯 <b>R² Score:</b> {info_canal['r2_score']:.3f}
-{di_mensaje}⏰ <b>Hora:</b> {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
-💡 <b>Estrategia:</b> BREAKOUT + REENTRY con confirmación DI+/DI-
+🎰 <b>Stochástico:</b> {stoch_estado}
+📊 <b>Stoch K:</b> {info_canal['stoch_k']:.1f}
+📈 <b>Stoch D:</b> {info_canal['stoch_d']:.1f}
+⏰ <b>Hora:</b> {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+💡 <b>Estrategia:</b> BREAKOUT + REENTRY con confirmación Stochastic
         """
         token = self.config.get('telegram_token')
         chat_ids = self.config.get('telegram_chat_ids', [])
@@ -3265,7 +3476,8 @@ class TradingBot:
                         'nivel_fuerza': info_canal['nivel_fuerza'],
                         'timeframe_utilizado': config_optima['timeframe'],
                         'velas_utilizadas': config_optima['num_velas'],
-
+                        'stoch_k': info_canal['stoch_k'],
+                        'stoch_d': info_canal['stoch_d'],
                         'breakout_usado': breakout_info is not None,
                         'operacion_ejecutada': True,  # Confirma ejecución exitosa
                         'operacion_manual_usuario': False,  # MARCA EXPLÍCITA: Operación automática
@@ -3306,7 +3518,8 @@ class TradingBot:
                 'nivel_fuerza': info_canal['nivel_fuerza'],
                 'timeframe_utilizado': config_optima['timeframe'],
                 'velas_utilizadas': config_optima['num_velas'],
-
+                'stoch_k': info_canal['stoch_k'],
+                'stoch_d': info_canal['stoch_d'],
                 'breakout_usado': breakout_info is not None,
                 'operacion_ejecutada': False  # Confirma que no se ejecutó automáticamente
             }
@@ -3324,7 +3537,7 @@ class TradingBot:
                     'angulo_tendencia', 'pearson', 'r2_score',
                     'ancho_canal_relativo', 'ancho_canal_porcentual',
                     'nivel_fuerza', 'timeframe_utilizado', 'velas_utilizadas',
-                    'breakout_usado', 'operacion_ejecutada'
+                    'stoch_k', 'stoch_d', 'breakout_usado', 'operacion_ejecutada'
                 ])
 
     def registrar_operacion(self, datos_operacion):
@@ -3349,7 +3562,8 @@ class TradingBot:
                 datos_operacion.get('nivel_fuerza', 1),
                 datos_operacion.get('timeframe_utilizado', 'N/A'),
                 datos_operacion.get('velas_utilizadas', 0),
-
+                datos_operacion.get('stoch_k', 0),
+                datos_operacion.get('stoch_d', 0),
                 datos_operacion.get('breakout_usado', False),
                 datos_operacion.get('operacion_ejecutada', False)
             ])
@@ -3410,7 +3624,8 @@ class TradingBot:
                     'nivel_fuerza': operacion.get('nivel_fuerza', 1),
                     'timeframe_utilizado': operacion.get('timeframe_utilizado', 'N/A'),
                     'velas_utilizadas': operacion.get('velas_utilizadas', 0),
-
+                    'stoch_k': operacion.get('stoch_k', 0),
+                    'stoch_d': operacion.get('stoch_d', 0),
                     'breakout_usado': operacion.get('breakout_usado', False),
                     'operacion_ejecutada': operacion.get('operacion_ejecutada', False)
                 }
@@ -3461,104 +3676,31 @@ class TradingBot:
         """
         return mensaje
 
-    def calcular_adx_di(self, datos_mercado, length=14, threshold=20):
-        """
-        Calcula el ADX (Average Directional Index) y los indicadores DI+ y DI-
-        para confirmación de tendencia.
-        
-        Args:
-            datos_mercado: Dict con listas de 'maximos', 'minimos', 'cierres'
-            length: Período para el cálculo (default: 14)
-            threshold: Umbral del ADX para considerar tendencia fuerte (default: 20)
-        
-        Returns:
-            dict con: 'di_plus', 'di_minus', 'adx', 'confirmacion', 'direccion', 'mensaje'
-        """
-        if not ADX_INDICATOR_DISPONIBLE:
-            return {
-                'di_plus': 0, 'di_minus': 0, 'adx': 0,
-                'confirmacion': False, 'direccion': 'NEUTRAL',
-                'mensaje': 'ADX no disponible'
-            }
-        
-        try:
-            # Preparar datos para ADX
-            df = preparar_datos_adx(datos_mercado)
-            if df is None or len(df) < length + 14:
-                return {
-                    'di_plus': 0, 'di_minus': 0, 'adx': 0,
-                    'confirmacion': False, 'direccion': 'NEUTRAL',
-                    'mensaje': 'Datos insuficientes para ADX'
-                }
-            
-            # Calcular ADX/DI
-            result_df = calculate_adx_di(df, length=length, threshold=threshold)
-            
-            # Obtener valores actuales
-            di_plus = result_df['DIPlus'].iloc[-1]
-            di_minus = result_df['DIMinus'].iloc[-1]
-            adx = result_df['ADX'].iloc[-1]
-            
-            # Obtener confirmación
-            confirmacion = get_adx_confirmation(di_plus, di_minus, adx, threshold)
-            
-            return {
-                'di_plus': di_plus,
-                'di_minus': di_minus,
-                'adx': adx,
-                'confirmacion': confirmacion['confirmacion'],
-                'direccion': confirmacion['direccion'],
-                'fuerza': confirmacion.get('fuerza', 'N/A'),
-                'mensaje': confirmacion['mensaje']
-            }
-        except Exception as e:
-            print(f"     ⚠️ Error calculando ADX/DI: {e}")
-            return {
-                'di_plus': 0, 'di_minus': 0, 'adx': 0,
-                'confirmacion': False, 'direccion': 'NEUTRAL',
-                'mensaje': f'Error en ADX: {str(e)}'
-            }
-
-    def verificar_confirmacion_adx(self, tipo_operacion, datos_mercado, threshold_adx=20):
-        """
-        Verifica la confirmación del ADX/DI para una operación específica.
-        
-        Args:
-            tipo_operacion: 'LONG' o 'SHORT'
-            datos_mercado: Datos del mercado
-            threshold_adx: Umbral mínimo del ADX
-        
-        Returns:
-            dict con: 'confirmado', 'detalles', 'mensaje'
-        """
-        resultado_adx = self.calcular_adx_di(datos_mercado, threshold=threshold_adx)
-        
-        if not resultado_adx['confirmacion']:
-            return {
-                'confirmado': False,
-                'detalles': resultado_adx,
-                'mensaje': f"❌ {resultado_adx['mensaje']}"
-            }
-        
-        # Verificar que la dirección del ADX coincida con el tipo de operación
-        if tipo_operacion == 'LONG' and resultado_adx['direccion'] == 'LONG':
-            return {
-                'confirmado': True,
-                'detalles': resultado_adx,
-                'mensaje': f"✅ ADX confirma LONG: {resultado_adx['mensaje']}"
-            }
-        elif tipo_operacion == 'SHORT' and resultado_adx['direccion'] == 'SHORT':
-            return {
-                'confirmado': True,
-                'detalles': resultado_adx,
-                'mensaje': f"✅ ADX confirma SHORT: {resultado_adx['mensaje']}"
-            }
-        else:
-            return {
-                'confirmado': False,
-                'detalles': resultado_adx,
-                'mensaje': f"❌ ADX contradice operación: {resultado_adx['mensaje']}"
-            }
+    def calcular_stochastic(self, datos_mercado, period=14, k_period=3, d_period=3):
+        if len(datos_mercado['cierres']) < period:
+            return 50, 50
+        cierres = datos_mercado['cierres']
+        maximos = datos_mercado['maximos']
+        minimos = datos_mercado['minimos']
+        k_values = []
+        for i in range(period-1, len(cierres)):
+            highest_high = max(maximos[i-period+1:i+1])
+            lowest_low = min(minimos[i-period+1:i+1])
+            if highest_high == lowest_low:
+                k = 50
+            else:
+                k = 100 * (cierres[i] - lowest_low) / (highest_high - lowest_low)
+            k_values.append(k)
+        if len(k_values) >= k_period:
+            k_smoothed = []
+            for i in range(k_period-1, len(k_values)):
+                k_avg = sum(k_values[i-k_period+1:i+1]) / k_period
+                k_smoothed.append(k_avg)
+            if len(k_smoothed) >= d_period:
+                d = sum(k_smoothed[-d_period:]) / d_period
+                k_final = k_smoothed[-1]
+                return k_final, d
+        return 50, 50
 
     def calcular_regresion_lineal(self, x, y):
         if len(x) != len(y) or len(x) == 0:
@@ -3711,45 +3853,50 @@ class TradingBot:
                 soporte_values.append(sop)
             df['Resistencia'] = resistencia_values
             df['Soporte'] = soporte_values
-            # Calcular ADX/DI para el gráfico
-            try:
-                from adx_di_indicator import calculate_adx_di, preparar_datos_adx
-                # IMPORTANTE: Usar solo las velas necesarias para el gráfico (evitar mismatch de longitudes)
-                num_velas_grafico = len(df)
-                
-                # CORRECCIÓN: Crear el formato correcto de datos para ADX desde el DataFrame df
-                # Las columnas del DataFrame son 'high', 'low', 'close' (minúsculas)
-                datos_adx_formato = {
-                    'maximos': df['high'].tolist(),
-                    'minimos': df['low'].tolist(),
-                    'cierres': df['close'].tolist()
-                }
-                
-                datos_adx = preparar_datos_adx(datos_adx_formato)
-                if datos_adx is not None and len(datos_adx) >= 14:
-                    # Recortar datos_adx para que tenga el mismo número de velas que el gráfico
-                    datos_adx_recortado = datos_adx.iloc[-num_velas_grafico:].copy()
-                    adx_result = calculate_adx_di(datos_adx_recortado, length=14, threshold=20)
-                    # Asignar valores al DataFrame del gráfico (ahora con longitud correcta)
-                    df['ADX'] = adx_result['ADX'].values
-                    df['DIPlus'] = adx_result['DIPlus'].values
-                    df['DIMinus'] = adx_result['DIMinus'].values
-                    adx_disponible = True
-                    print(f"     ✅ ADX/DI calculado correctamente - ADX último: {df['ADX'].iloc[-1]:.2f}, DI+: {df['DIPlus'].iloc[-1]:.2f}, DI-: {df['DIMinus'].iloc[-1]:.2f}")
+            period = 14
+            k_period = 3
+            d_period = 3
+            stoch_k_values = []
+            for i in range(len(df)):
+                if i < period - 1:
+                    stoch_k_values.append(50)
                 else:
-                    print(f"     ⚠️ Datos insuficientes para ADX/DI")
-                    adx_disponible = False
-                    # INICIALIZAR COLUMNAS CON CEROS PARA EVITAR ERRORES
-                    df['ADX'] = 0
-                    df['DIPlus'] = 0
-                    df['DIMinus'] = 0
-            except Exception as e:
-                print(f"     ⚠️ Error calculando ADX/DI para gráfico: {e}")
-                adx_disponible = False
-                # INICIALIZAR COLUMNAS CON CEROS PARA EVITAR ERRORES
-                df['ADX'] = 0
-                df['DIPlus'] = 0
-                df['DIMinus'] = 0
+                    highest_high = df['High'].iloc[i-period+1:i+1].max()
+                    lowest_low = df['Low'].iloc[i-period+1:i+1].min()
+                    if highest_high == lowest_low:
+                        k = 50
+                    else:
+                        k = 100 * (df['Close'].iloc[i] - lowest_low) / (highest_high - lowest_low)
+                    stoch_k_values.append(k)
+            k_smoothed = []
+            for i in range(len(stoch_k_values)):
+                if i < k_period - 1:
+                    k_smoothed.append(stoch_k_values[i])
+                else:
+                    k_avg = sum(stoch_k_values[i-k_period+1:i+1]) / k_period
+                    k_smoothed.append(k_avg)
+            stoch_d_values = []
+            for i in range(len(k_smoothed)):
+                if i < d_period - 1:
+                    stoch_d_values.append(k_smoothed[i])
+                else:
+                    d = sum(k_smoothed[i-d_period+1:i+1]) / d_period
+                    stoch_d_values.append(d)
+            df['Stoch_K'] = k_smoothed
+            df['Stoch_D'] = stoch_d_values
+            
+            # =====================================================
+            # NUEVO: Calcular ADX, DI+ y DI- usando la función importada
+            # =====================================================
+            adx_results = calcular_adx_di(
+                df['High'].values, 
+                df['Low'].values, 
+                df['Close'].values, 
+                length=14
+            )
+            df['ADX'] = adx_results['adx']
+            df['DI+'] = adx_results['di_plus']
+            df['DI-'] = adx_results['di_minus']
             
             apds = [
                 mpf.make_addplot(df['Resistencia'], color='#5444ff', linestyle='--', width=2, panel=0),
@@ -3762,37 +3909,39 @@ class TradingBot:
                 apds.append(mpf.make_addplot(entry_line, color='#FFD700', linestyle='-', width=2, panel=0))
                 apds.append(mpf.make_addplot(tp_line, color='#00FF00', linestyle='-', width=2, panel=0))
                 apds.append(mpf.make_addplot(sl_line, color='#FF0000', linestyle='-', width=2, panel=0))
+            apds.append(mpf.make_addplot(df['Stoch_K'], color='#00BFFF', width=1.5, panel=1, ylabel='Stochastic'))
+            apds.append(mpf.make_addplot(df['Stoch_D'], color='#FF6347', width=1.5, panel=1))
+            overbought = [80] * len(df)
+            oversold = [20] * len(df)
+            apds.append(mpf.make_addplot(overbought, color="#E7E4E4", linestyle='--', width=0.8, panel=1, alpha=0.5))
+            apds.append(mpf.make_addplot(oversold, color="#E9E4E4", linestyle='--', width=0.8, panel=1, alpha=0.5))
             
-            # Agregar ADX/DI al gráfico si está disponible
-            if adx_disponible:
-                # Panel 1: ADX (fuerza de la tendencia)
-                apds.append(mpf.make_addplot(df['ADX'], color='#00FF00', width=1.5, panel=1, ylabel='ADX/DI'))
-                # Panel 1: DI+ (tendencia alcista)
-                apds.append(mpf.make_addplot(df['DIPlus'], color='#00BFFF', width=1.5, panel=1))
-                # Panel 1: DI- (tendencia bajista)
-                apds.append(mpf.make_addplot(df['DIMinus'], color='#FF6347', width=1.5, panel=1))
-                # Línea threshold (nivel 20)
-                threshold_line = [20] * len(df)
-                apds.append(mpf.make_addplot(threshold_line, color="#E7E4E4", linestyle='--', width=0.8, panel=1, alpha=0.5))
+            # =====================================================
+            # NUEVO: Añadir panel de ADX, DI+ y DI- (Panel 2)
+            # =====================================================
+            apds.append(mpf.make_addplot(df['DI+'], color='#00FF00', width=1.5, panel=2, ylabel='ADX/DI'))
+            apds.append(mpf.make_addplot(df['DI-'], color='#FF0000', width=1.5, panel=2))
+            apds.append(mpf.make_addplot(df['ADX'], color='#000080', width=2, panel=2))  # Navy color
+            # Línea threshold en ADX
+            adx_threshold = [20] * len(df)
+            apds.append(mpf.make_addplot(adx_threshold, color="#808080", linestyle='--', width=0.8, panel=2, alpha=0.5))
             
             fig, axes = mpf.plot(df, type='candle', style='nightclouds',
-                               title=f'{simbolo} | {tipo_operacion} | {config_optima["timeframe"]} | BITGET FUTUROS + Breakout+Reentry (ADX/DI)',
+                               title=f'{simbolo} | {tipo_operacion} | {config_optima["timeframe"]} | BITGET FUTUROS + Breakout+Reentry',
                                ylabel='Precio',
                                addplot=apds,
                                volume=False,
                                returnfig=True,
-                               figsize=(14, 10),
-                               panel_ratios=(3, 1))
+                               figsize=(14, 12),
+                               panel_ratios=(3, 1, 1))
+            axes[2].set_ylim([0, 100])
+            axes[2].grid(True, alpha=0.3)
+            # Configurar panel ADX (axes[3])
+            if len(axes) > 3:
+                axes[3].set_ylim([0, 100])
+                axes[3].grid(True, alpha=0.3)
+                axes[3].set_ylabel('ADX/DI', fontsize=8)
             
-            if adx_disponible:
-                axes[2].set_ylim(0, 100)
-                axes[2].grid(True, alpha=0.3)
-            
-            buf = BytesIO()
-            plt.savefig(buf, format='png', dpi=100, bbox_inches='tight', facecolor='#1a1a1a')
-            buf.seek(0)
-            plt.close(fig)
-            return buf
             buf = BytesIO()
             plt.savefig(buf, format='png', dpi=100, bbox_inches='tight', facecolor='#1a1a1a')
             buf.seek(0)
@@ -3929,7 +4078,7 @@ class TradingBot:
         print(f"⏰ Timeframes: {', '.join(self.config.get('timeframes', []))}")
         print(f"🕯️ Velas: {self.config.get('velas_options', [])}")
         print(f"📏 ANCHO MÍNIMO: {self.config.get('min_channel_width_percent', 4)}%")
-        print(f"🚀 Estrategia: 1) Detectar Breakout → 2) Esperar Reentry → 3) Confirmar con DI+ > DI-")
+        print(f"🚀 Estrategia: 1) Detectar Breakout → 2) Esperar Reentry → 3) Confirmar con Stoch")
         if self.bitget_client:
             print(f"🤖 BITGET FUTUROS: ✅ API Conectada")
             print(f"⚡ Apalancamiento: {self.leverage_por_defecto}x")
