@@ -31,7 +31,7 @@ try:
     ADX_INDICATOR_DISPONIBLE = True
 except ImportError:
     ADX_INDICATOR_DISPONIBLE = False
-    print("⚠️ ADX/DI indicator no disponible, usando solo Stochastic")
+    print("⚠️ ADX/DI indicator no disponible")
 
 # Configurar logging básico
 logging.basicConfig(level=logging.INFO, stream=sys.stdout, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -2430,8 +2430,6 @@ class TradingBot:
                 'nivel_fuerza': operacion.get('nivel_fuerza', 1),
                 'timeframe_utilizado': operacion.get('timeframe_utilizado', 'N/A'),
                 'velas_utilizadas': operacion.get('velas_utilizadas', 0),
-                'stoch_k': operacion.get('stoch_k', 0),
-                'stoch_d': operacion.get('stoch_d', 0),
                 'breakout_usado': operacion.get('breakout_usado', False),
                 'operacion_ejecutada': operacion.get('operacion_ejecutada', False),
                 'reason': reason,
@@ -2641,7 +2639,7 @@ class TradingBot:
         pearson, angulo_tendencia = self.calcular_pearson_y_angulo(tiempos_reg, cierres)
         fuerza_texto, nivel_fuerza = self.clasificar_fuerza_tendencia(angulo_tendencia)
         direccion = self.determinar_direccion_tendencia(angulo_tendencia, 1)
-        stoch_k, stoch_d = self.calcular_stochastic(datos_mercado)
+
         precio_medio = (resistencia_superior + soporte_inferior) / 2
         ancho_canal_absoluto = resistencia_superior - soporte_inferior
         ancho_canal_porcentual = (ancho_canal_absoluto / precio_medio) * 100
@@ -2663,8 +2661,7 @@ class TradingBot:
             'r2_score': self.calcular_r2(cierres, tiempos_reg, pendiente_cierre, intercepto_cierre),
             'pendiente_resistencia': pendiente_max,
             'pendiente_soporte': pendiente_min,
-            'stoch_k': stoch_k,
-            'stoch_d': stoch_d,
+
             'timeframe': datos_mercado.get('timeframe', 'N/A'),
             'num_velas': candle_period
         }
@@ -2803,38 +2800,11 @@ class TradingBot:
                 soporte_values.append(sop)
             df['Resistencia'] = resistencia_values
             df['Soporte'] = soporte_values
-            # Calcular Stochastic
-            period = 14
-            k_period = 3
-            d_period = 3
-            stoch_k_values = []
-            for i in range(len(df)):
-                if i < period - 1:
-                    stoch_k_values.append(50)
-                else:
-                    highest_high = df['High'].iloc[i-period+1:i+1].max()
-                    lowest_low = df['Low'].iloc[i-period+1:i+1].min()
-                    if highest_high == lowest_low:
-                        k = 50
-                    else:
-                        k = 100 * (df['Close'].iloc[i] - lowest_low) / (highest_high - lowest_low)
-                    stoch_k_values.append(k)
-            k_smoothed = []
-            for i in range(len(stoch_k_values)):
-                if i < k_period - 1:
-                    k_smoothed.append(stoch_k_values[i])
-                else:
-                    k_avg = sum(stoch_k_values[i-k_period+1:i+1]) / k_period
-                    k_smoothed.append(k_avg)
-            stoch_d_values = []
-            for i in range(len(k_smoothed)):
-                if i < d_period - 1:
-                    stoch_d_values.append(k_smoothed[i])
-                else:
-                    d = sum(k_smoothed[i-d_period+1:i+1]) / d_period
-                    stoch_d_values.append(d)
-            df['Stoch_K'] = k_smoothed
-            df['Stoch_D'] = stoch_d_values
+            # Calcular ADX/DI para el gráfico
+            adx_data = preparar_datos_adx(df)
+            df['ADX'] = adx_data['adx']
+            df['DI_Plus'] = adx_data['di_plus']
+            df['DI_Minus'] = adx_data['di_minus']
             # Preparar plots
             apds = [
                 mpf.make_addplot(df['Resistencia'], color='#5444ff', linestyle='--', width=2, panel=0),
@@ -2850,13 +2820,10 @@ class TradingBot:
                 color_breakout = '#D68F01'
                 titulo_extra = "📉 RUPTURA BAJISTA"
             apds.append(mpf.make_addplot(breakout_line, color=color_breakout, linestyle='-', width=3, panel=0, alpha=0.8))
-            # Stochastic
-            apds.append(mpf.make_addplot(df['Stoch_K'], color='#00BFFF', width=1.5, panel=1, ylabel='Stochastic'))
-            apds.append(mpf.make_addplot(df['Stoch_D'], color='#FF6347', width=1.5, panel=1))
-            overbought = [80] * len(df)
-            oversold = [20] * len(df)
-            apds.append(mpf.make_addplot(overbought, color="#E7E4E4", linestyle='--', width=0.8, panel=1, alpha=0.5))
-            apds.append(mpf.make_addplot(oversold, color="#E9E4E4", linestyle='--', width=0.8, panel=1, alpha=0.5))
+            # ADX/DI en panel inferior
+            apds.append(mpf.make_addplot(df['ADX'], color='#FFFF00', width=1.5, panel=1, ylabel='ADX/DI'))
+            apds.append(mpf.make_addplot(df['DI_Plus'], color='#00FF00', width=1.2, panel=1))
+            apds.append(mpf.make_addplot(df['DI_Minus'], color='#FF0000', width=1.2, panel=1))
             # Crear gráfico
             fig, axes = mpf.plot(df, type='candle', style='nightclouds',
                                title=f'{simbolo} | {titulo_extra} | {config_optima["timeframe"]} | ⏳ ESPERANDO REENTRY',
@@ -2866,7 +2833,7 @@ class TradingBot:
                                returnfig=True,
                                figsize=(14, 10),
                                panel_ratios=(3, 1))
-            axes[2].set_ylim([0, 100])
+
             axes[2].grid(True, alpha=0.3)
             buf = BytesIO()
             plt.savefig(buf, format='png', dpi=100, bbox_inches='tight', facecolor='#1a1a1a')
@@ -2902,16 +2869,17 @@ class TradingBot:
             if tiempo_desde_ultimo < 115:
                 print(f"     ⏰ {simbolo} - Breakout detectado recientemente ({tiempo_desde_ultimo:.1f} min), omitiendo...")
                 return None
-        # LÓGICA CORRECTA DE BREAKOUT:
-        # Canal ALCISTA: Precio rompe resistencia hacia arriba → BREAKOUT_LONG
-        # Canal BAJISTA: Precio rompe soporte hacia abajo → BREAKOUT_SHORT
+        # LÓGICA ORIGINAL - Estrategia de FALSA RUPTURA:
+        # Canal ALCISTA: Precio rompe soporte hacia ABAJO → BREAKOUT_LONG (falsa ruptura)
+        # Canal BAJISTA: Precio rompe resistencia hacia ARRIBA → BREAKOUT_SHORT (falsa ruptura)
+        # Luego se espera reentry para entrar en dirección de la tendencia original
         if direccion == "🟢 ALCISTA" and nivel_fuerza >= 2:
-            if precio_cierre > resistencia:  # Precio rompió hacia arriba la resistencia
-                print(f"     🚀 {simbolo} - BREAKOUT LONG: {precio_cierre:.8f} > Resistencia: {resistencia:.8f}")
+            if precio_cierre < soporte:  # Precio rompió hacia abajo el soporte (falsa ruptura)
+                print(f"     🚀 {simbolo} - BREAKOUT LONG (falsa ruptura): {precio_cierre:.8f} < Soporte: {soporte:.8f}")
                 return "BREAKOUT_LONG"
         elif direccion == "🔴 BAJISTA" and nivel_fuerza >= 2:
-            if precio_cierre < soporte:  # Precio rompió hacia abajo el soporte
-                print(f"     📉 {simbolo} - BREAKOUT SHORT: {precio_cierre:.8f} < Soporte: {soporte:.8f}")
+            if precio_cierre > resistencia:  # Precio rompió hacia arriba la resistencia (falsa ruptura)
+                print(f"     📉 {simbolo} - BREAKOUT SHORT (falsa ruptura): {precio_cierre:.8f} > Resistencia: {resistencia:.8f}")
                 return "BREAKOUT_SHORT"
         return None
 
@@ -3038,13 +3006,7 @@ class TradingBot:
                 if not info_canal:
                     print(f"   ❌ {simbolo} - Error calculando canal")
                     continue
-                estado_stoch = ""
-                if info_canal['stoch_k'] <= 30:
-                    estado_stoch = "📉 OVERSOLD"
-                elif info_canal['stoch_k'] >= 70:
-                    estado_stoch = "📈 OVERBOUGHT"
-                else:
-                    estado_stoch = "➖ NEUTRO"
+
                 precio_actual = datos_mercado['precio_actual']
                 resistencia = info_canal['resistencia']
                 soporte = info_canal['soporte']
@@ -3057,7 +3019,7 @@ class TradingBot:
                 print(
     f"📊 {simbolo} - {config_optima['timeframe']} - {config_optima['num_velas']}v | "
     f"{info_canal['direccion']} ({info_canal['angulo_tendencia']:.1f}° - {info_canal['fuerza_texto']}) | "
-    f"Ancho: {info_canal['ancho_canal_porcentual']:.1f}% - Stoch: {info_canal['stoch_k']:.1f}/{info_canal['stoch_d']:.1f} {estado_stoch} | "
+    f"Ancho: {info_canal['ancho_canal_porcentual']:.1f}% | "
     f"Precio: {posicion}"
                 )
                 if (info_canal['nivel_fuerza'] < 2 or 
@@ -3263,8 +3225,7 @@ class TradingBot:
                         'nivel_fuerza': info_canal['nivel_fuerza'],
                         'timeframe_utilizado': config_optima['timeframe'],
                         'velas_utilizadas': config_optima['num_velas'],
-                        'stoch_k': info_canal['stoch_k'],
-                        'stoch_d': info_canal['stoch_d'],
+
                         'breakout_usado': breakout_info is not None,
                         'operacion_ejecutada': True,  # Confirma ejecución exitosa
                         'operacion_manual_usuario': False,  # MARCA EXPLÍCITA: Operación automática
@@ -3305,8 +3266,7 @@ class TradingBot:
                 'nivel_fuerza': info_canal['nivel_fuerza'],
                 'timeframe_utilizado': config_optima['timeframe'],
                 'velas_utilizadas': config_optima['num_velas'],
-                'stoch_k': info_canal['stoch_k'],
-                'stoch_d': info_canal['stoch_d'],
+
                 'breakout_usado': breakout_info is not None,
                 'operacion_ejecutada': False  # Confirma que no se ejecutó automáticamente
             }
@@ -3324,7 +3284,7 @@ class TradingBot:
                     'angulo_tendencia', 'pearson', 'r2_score',
                     'ancho_canal_relativo', 'ancho_canal_porcentual',
                     'nivel_fuerza', 'timeframe_utilizado', 'velas_utilizadas',
-                    'stoch_k', 'stoch_d', 'breakout_usado', 'operacion_ejecutada'
+                    'breakout_usado', 'operacion_ejecutada'
                 ])
 
     def registrar_operacion(self, datos_operacion):
@@ -3349,8 +3309,7 @@ class TradingBot:
                 datos_operacion.get('nivel_fuerza', 1),
                 datos_operacion.get('timeframe_utilizado', 'N/A'),
                 datos_operacion.get('velas_utilizadas', 0),
-                datos_operacion.get('stoch_k', 0),
-                datos_operacion.get('stoch_d', 0),
+
                 datos_operacion.get('breakout_usado', False),
                 datos_operacion.get('operacion_ejecutada', False)
             ])
@@ -3411,8 +3370,7 @@ class TradingBot:
                     'nivel_fuerza': operacion.get('nivel_fuerza', 1),
                     'timeframe_utilizado': operacion.get('timeframe_utilizado', 'N/A'),
                     'velas_utilizadas': operacion.get('velas_utilizadas', 0),
-                    'stoch_k': operacion.get('stoch_k', 0),
-                    'stoch_d': operacion.get('stoch_d', 0),
+
                     'breakout_usado': operacion.get('breakout_usado', False),
                     'operacion_ejecutada': operacion.get('operacion_ejecutada', False)
                 }
@@ -3462,32 +3420,6 @@ class TradingBot:
 🕒 {datos_operacion['timestamp']}
         """
         return mensaje
-
-    def calcular_stochastic(self, datos_mercado, period=14, k_period=3, d_period=3):
-        if len(datos_mercado['cierres']) < period:
-            return 50, 50
-        cierres = datos_mercado['cierres']
-        maximos = datos_mercado['maximos']
-        minimos = datos_mercado['minimos']
-        k_values = []
-        for i in range(period-1, len(cierres)):
-            highest_high = max(maximos[i-period+1:i+1])
-            lowest_low = min(minimos[i-period+1:i+1])
-            if highest_high == lowest_low:
-                k = 50
-            else:
-                k = 100 * (cierres[i] - lowest_low) / (highest_high - lowest_low)
-            k_values.append(k)
-        if len(k_values) >= k_period:
-            k_smoothed = []
-            for i in range(k_period-1, len(k_values)):
-                k_avg = sum(k_values[i-k_period+1:i+1]) / k_period
-                k_smoothed.append(k_avg)
-            if len(k_smoothed) >= d_period:
-                d = sum(k_smoothed[-d_period:]) / d_period
-                k_final = k_smoothed[-1]
-                return k_final, d
-        return 50, 50
 
     def calcular_adx_di(self, datos_mercado, length=14, threshold=20):
         """
@@ -3929,7 +3861,7 @@ class TradingBot:
         print(f"⏰ Timeframes: {', '.join(self.config.get('timeframes', []))}")
         print(f"🕯️ Velas: {self.config.get('velas_options', [])}")
         print(f"📏 ANCHO MÍNIMO: {self.config.get('min_channel_width_percent', 4)}%")
-        print(f"🚀 Estrategia: 1) Detectar Breakout → 2) Esperar Reentry → 3) Confirmar con Stoch")
+        print(f"🚀 Estrategia: 1) Detectar Breakout → 2) Esperar Reentry → 3) Confirmar con DI+ > DI-")
         if self.bitget_client:
             print(f"🤖 BITGET FUTUROS: ✅ API Conectada")
             print(f"⚡ Apalancamiento: {self.leverage_por_defecto}x")
