@@ -2827,10 +2827,13 @@ class TradingBot:
                 df['ADX'] = result_adx['ADX'].values if 'ADX' in result_adx.columns else 0
                 df['DI_Plus'] = result_adx['DIPlus'].values if 'DIPlus' in result_adx.columns else 0
                 df['DI_Minus'] = result_adx['DIMinus'].values if 'DIMinus' in result_adx.columns else 0
+                adx_disponible = True
+                
+                # DEBUG: Mostrar valores de ADX para diagnóstico
+                print(f"     🔍 DEBUG ADX - df.shape: {df.shape}, ADX último: {df['ADX'].iloc[-1]:.4f}, DI+: {df['DI_Plus'].iloc[-1]:.4f}, DI-: {df['DI_Minus'].iloc[-1]:.4f}")
             else:
-                df['ADX'] = 0
-                df['DI_Plus'] = 0
-                df['DI_Minus'] = 0
+                print(f"     ⚠️ Datos insuficientes para ADX/DI en gráfico de breakout: datos_adx={type(datos_adx)}, len={len(datos_adx) if datos_adx is not None else 'None'}")
+                adx_disponible = False
             # Preparar plots
             apds = [
                 mpf.make_addplot(df['Resistencia'], color='#5444ff', linestyle='--', width=2, panel=0),
@@ -2846,10 +2849,12 @@ class TradingBot:
                 color_breakout = '#D68F01'
                 titulo_extra = "📉 RUPTURA BAJISTA"
             apds.append(mpf.make_addplot(breakout_line, color=color_breakout, linestyle='-', width=3, panel=0, alpha=0.8))
-            # ADX/DI en panel inferior
-            apds.append(mpf.make_addplot(df['ADX'], color='#FFFF00', width=1.5, panel=1, ylabel='ADX/DI'))
-            apds.append(mpf.make_addplot(df['DI_Plus'], color='#00FF00', width=1.2, panel=1))
-            apds.append(mpf.make_addplot(df['DI_Minus'], color='#FF0000', width=1.2, panel=1))
+            
+            # Solo agregar ADX/DI al gráfico si está disponible
+            if adx_disponible:
+                apds.append(mpf.make_addplot(df['ADX'], color='#FFFF00', width=1.5, panel=1, ylabel='ADX/DI'))
+                apds.append(mpf.make_addplot(df['DI_Plus'], color='#00FF00', width=1.2, panel=1))
+                apds.append(mpf.make_addplot(df['DI_Minus'], color='#FF0000', width=1.2, panel=1))
             # Crear gráfico
             fig, axes = mpf.plot(df, type='candle', style='nightclouds',
                                title=f'{simbolo} | {titulo_extra} | {config_optima["timeframe"]} | ⏳ ESPERANDO REENTRY',
@@ -2861,6 +2866,10 @@ class TradingBot:
                                panel_ratios=(3, 1))
 
             axes[2].grid(True, alpha=0.3)
+            
+            # Forzar escala correcta para ADX/DI (0-100)
+            if adx_disponible and len(df) > 0:
+                axes[2].set_ylim(0, 100)
             buf = BytesIO()
             plt.savefig(buf, format='png', dpi=100, bbox_inches='tight', facecolor='#1a1a1a')
             buf.seek(0)
@@ -3763,7 +3772,7 @@ class TradingBot:
                                panel_ratios=(3, 1))
             
             if adx_disponible:
-                axes[2].set_ylim([0, max(50, df['DIPlus'].max() * 1.2, df['DIMinus'].max() * 1.2)])
+                axes[2].set_ylim(0, 100)
                 axes[2].grid(True, alpha=0.3)
             
             buf = BytesIO()
