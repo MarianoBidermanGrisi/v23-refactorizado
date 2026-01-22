@@ -1537,7 +1537,7 @@ class TradingBot:
         self.estado_file = config.get('estado_file', 'estado_bot.json')
         self.cargar_estado()
         
-        # Inicializar persistencia avanzada
+        # Inicializar persistencia avanzada PRIMERO (antes de cualquier uso de senales_enviadas)
         self.inicializar_persistencia_avanzada()
         
         # Inicializar cliente Bitget FUTUROS con credenciales REALES
@@ -1555,7 +1555,9 @@ class TradingBot:
                 logger.warning("⚠️ No se pudieron verificar las credenciales de BITGET FUTUROS")
         
         # LIMPIEZA INICIAL: Liberar símbolos bloquados si no hay posiciones activas
-        self.limpiar_bloqueos_iniciales()
+        # Esta línea debe estar DESPUÉS de inicializar_persistencia_avanzada()
+        if self.bitget_client:
+            self.limpiar_bloqueos_iniciales()
         
         # Configuración de operaciones automáticas
         self.ejecutar_operaciones_automaticas = config.get('ejecutar_operaciones_automaticas', False)
