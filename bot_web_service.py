@@ -2801,12 +2801,18 @@ class TradingBot:
             df['Resistencia'] = resistencia_values
             df['Soporte'] = soporte_values
             # Calcular ADX/DI para el gráfico
-            # Primero convertir datos del mercado a DataFrame
+            # IMPORTANTE: Usar solo las velas necesarias para el gráfico (evitar mismatch de longitudes)
+            num_velas_grafico = len(df)
             datos_adx = preparar_datos_adx(datos_mercado)
             if datos_adx is not None and len(datos_adx) >= 14:
-                # Luego calcular ADX/DI usando la función correcta
-                result_adx = calculate_adx_di(datos_adx, length=14, threshold=20)
-                # Asignar valores al DataFrame del gráfico
+                # Recortar datos_adx para que tenga el mismo número de velas que el gráfico
+                # Esto evita el error "Length of values does not match length of index"
+                datos_adx_recortado = datos_adx.iloc[-num_velas_grafico:].copy()
+                
+                # Calcular ADX/DI con los datos recortados
+                result_adx = calculate_adx_di(datos_adx_recortado, length=14, threshold=20)
+                
+                # Asignar valores al DataFrame del gráfico (ahora deben tener la misma longitud)
                 df['ADX'] = result_adx['ADX'].values if 'ADX' in result_adx.columns else 0
                 df['DI_Plus'] = result_adx['DIPlus'].values if 'DIPlus' in result_adx.columns else 0
                 df['DI_Minus'] = result_adx['DIMinus'].values if 'DIMinus' in result_adx.columns else 0
@@ -3683,11 +3689,14 @@ class TradingBot:
             # Calcular ADX/DI para el gráfico
             try:
                 from adx_di_indicator import calculate_adx_di, preparar_datos_adx
-                # Primero convertir datos del mercado a DataFrame con columnas correctas
+                # IMPORTANTE: Usar solo las velas necesarias para el gráfico (evitar mismatch de longitudes)
+                num_velas_grafico = len(df)
                 datos_adx = preparar_datos_adx(datos_mercado)
                 if datos_adx is not None and len(datos_adx) >= 14:
-                    adx_result = calculate_adx_di(datos_adx, length=14, threshold=20)
-                    # Asignar valores al DataFrame del gráfico
+                    # Recortar datos_adx para que tenga el mismo número de velas que el gráfico
+                    datos_adx_recortado = datos_adx.iloc[-num_velas_grafico:].copy()
+                    adx_result = calculate_adx_di(datos_adx_recortado, length=14, threshold=20)
+                    # Asignar valores al DataFrame del gráfico (ahora con longitud correcta)
                     df['ADX'] = adx_result['ADX'].values
                     df['DIPlus'] = adx_result['DIPlus'].values
                     df['DIMinus'] = adx_result['DIMinus'].values
