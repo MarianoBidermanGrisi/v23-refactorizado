@@ -2805,7 +2805,16 @@ class TradingBot:
             # Calcular ADX/DI para el gráfico
             # IMPORTANTE: Usar solo las velas necesarias para el gráfico (evitar mismatch de longitudes)
             num_velas_grafico = len(df)
-            datos_adx = preparar_datos_adx(datos_mercado)
+            
+            # CORRECCIÓN: Crear el formato correcto de datos para ADX desde el DataFrame df
+            # preparar_datos_adx espera un dict con 'maximos', 'minimos', 'cierres'
+            datos_adx_formato = {
+                'maximos': df['High'].tolist() if 'High' in df.columns else df['high'].tolist(),
+                'minimos': df['Low'].tolist() if 'Low' in df.columns else df['low'].tolist(),
+                'cierres': df['Close'].tolist() if 'Close' in df.columns else df['close'].tolist()
+            }
+            
+            datos_adx = preparar_datos_adx(datos_adx_formato)
             if datos_adx is not None and len(datos_adx) >= 14:
                 # Recortar datos_adx para que tenga el mismo número de velas que el gráfico
                 # Esto evita el error "Length of values does not match length of index"
@@ -3693,7 +3702,16 @@ class TradingBot:
                 from adx_di_indicator import calculate_adx_di, preparar_datos_adx
                 # IMPORTANTE: Usar solo las velas necesarias para el gráfico (evitar mismatch de longitudes)
                 num_velas_grafico = len(df)
-                datos_adx = preparar_datos_adx(datos_mercado)
+                
+                # CORRECCIÓN: Crear el formato correcto de datos para ADX desde el DataFrame df
+                # preparar_datos_adx espera un dict con 'maximos', 'minimos', 'cierres'
+                datos_adx_formato = {
+                    'maximos': df['High'].tolist() if 'High' in df.columns else df['high'].tolist(),
+                    'minimos': df['Low'].tolist() if 'Low' in df.columns else df['low'].tolist(),
+                    'cierres': df['Close'].tolist() if 'Close' in df.columns else df['close'].tolist()
+                }
+                
+                datos_adx = preparar_datos_adx(datos_adx_formato)
                 if datos_adx is not None and len(datos_adx) >= 14:
                     # Recortar datos_adx para que tenga el mismo número de velas que el gráfico
                     datos_adx_recortado = datos_adx.iloc[-num_velas_grafico:].copy()
@@ -3703,6 +3721,7 @@ class TradingBot:
                     df['DIPlus'] = adx_result['DIPlus'].values
                     df['DIMinus'] = adx_result['DIMinus'].values
                     adx_disponible = True
+                    print(f"     ✅ ADX/DI calculado correctamente - ADX último: {df['ADX'].iloc[-1]:.2f}")
                 else:
                     print(f"     ⚠️ Datos insuficientes para ADX/DI")
                     adx_disponible = False
