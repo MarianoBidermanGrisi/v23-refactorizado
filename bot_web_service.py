@@ -2808,10 +2808,11 @@ class TradingBot:
             
             # CORRECCIÓN: Crear el formato correcto de datos para ADX desde el DataFrame df
             # preparar_datos_adx espera un dict con 'maximos', 'minimos', 'cierres'
+            # Las columnas en el DataFrame pueden ser 'high', 'low', 'close' (minúsculas)
             datos_adx_formato = {
-                'maximos': df['High'].tolist() if 'High' in df.columns else df['high'].tolist(),
-                'minimos': df['Low'].tolist() if 'Low' in df.columns else df['low'].tolist(),
-                'cierres': df['Close'].tolist() if 'Close' in df.columns else df['close'].tolist()
+                'maximos': df['high'].tolist(),
+                'minimos': df['low'].tolist(),
+                'cierres': df['close'].tolist()
             }
             
             datos_adx = preparar_datos_adx(datos_adx_formato)
@@ -2825,15 +2826,19 @@ class TradingBot:
                 
                 # Asignar valores al DataFrame del gráfico (ahora deben tener la misma longitud)
                 df['ADX'] = result_adx['ADX'].values if 'ADX' in result_adx.columns else 0
-                df['DI_Plus'] = result_adx['DIPlus'].values if 'DIPlus' in result_adx.columns else 0
-                df['DI_Minus'] = result_adx['DIMinus'].values if 'DIMinus' in result_adx.columns else 0
+                df['DIPlus'] = result_adx['DIPlus'].values if 'DIPlus' in result_adx.columns else 0
+                df['DIMinus'] = result_adx['DIMinus'].values if 'DIMinus' in result_adx.columns else 0
                 adx_disponible = True
                 
                 # DEBUG: Mostrar valores de ADX para diagnóstico
-                print(f"     🔍 DEBUG ADX - df.shape: {df.shape}, ADX último: {df['ADX'].iloc[-1]:.4f}, DI+: {df['DI_Plus'].iloc[-1]:.4f}, DI-: {df['DI_Minus'].iloc[-1]:.4f}")
+                print(f"     🔍 DEBUG ADX - df.shape: {df.shape}, ADX último: {df['ADX'].iloc[-1]:.4f}, DI+: {df['DIPlus'].iloc[-1]:.4f}, DI-: {df['DIMinus'].iloc[-1]:.4f}")
             else:
                 print(f"     ⚠️ Datos insuficientes para ADX/DI en gráfico de breakout: datos_adx={type(datos_adx)}, len={len(datos_adx) if datos_adx is not None else 'None'}")
                 adx_disponible = False
+                # INICIALIZAR COLUMNAS CON CEROS PARA EVITAR ERRORES
+                df['ADX'] = 0
+                df['DIPlus'] = 0
+                df['DIMinus'] = 0
             # Preparar plots
             apds = [
                 mpf.make_addplot(df['Resistencia'], color='#5444ff', linestyle='--', width=2, panel=0),
@@ -2853,8 +2858,8 @@ class TradingBot:
             # Solo agregar ADX/DI al gráfico si está disponible
             if adx_disponible:
                 apds.append(mpf.make_addplot(df['ADX'], color='#FFFF00', width=1.5, panel=1, ylabel='ADX/DI'))
-                apds.append(mpf.make_addplot(df['DI_Plus'], color='#00FF00', width=1.2, panel=1))
-                apds.append(mpf.make_addplot(df['DI_Minus'], color='#FF0000', width=1.2, panel=1))
+                apds.append(mpf.make_addplot(df['DIPlus'], color='#00FF00', width=1.2, panel=1))
+                apds.append(mpf.make_addplot(df['DIMinus'], color='#FF0000', width=1.2, panel=1))
             # Crear gráfico
             fig, axes = mpf.plot(df, type='candle', style='nightclouds',
                                title=f'{simbolo} | {titulo_extra} | {config_optima["timeframe"]} | ⏳ ESPERANDO REENTRY',
@@ -3713,11 +3718,11 @@ class TradingBot:
                 num_velas_grafico = len(df)
                 
                 # CORRECCIÓN: Crear el formato correcto de datos para ADX desde el DataFrame df
-                # preparar_datos_adx espera un dict con 'maximos', 'minimos', 'cierres'
+                # Las columnas del DataFrame son 'high', 'low', 'close' (minúsculas)
                 datos_adx_formato = {
-                    'maximos': df['High'].tolist() if 'High' in df.columns else df['high'].tolist(),
-                    'minimos': df['Low'].tolist() if 'Low' in df.columns else df['low'].tolist(),
-                    'cierres': df['Close'].tolist() if 'Close' in df.columns else df['close'].tolist()
+                    'maximos': df['high'].tolist(),
+                    'minimos': df['low'].tolist(),
+                    'cierres': df['close'].tolist()
                 }
                 
                 datos_adx = preparar_datos_adx(datos_adx_formato)
@@ -3730,13 +3735,21 @@ class TradingBot:
                     df['DIPlus'] = adx_result['DIPlus'].values
                     df['DIMinus'] = adx_result['DIMinus'].values
                     adx_disponible = True
-                    print(f"     ✅ ADX/DI calculado correctamente - ADX último: {df['ADX'].iloc[-1]:.2f}")
+                    print(f"     ✅ ADX/DI calculado correctamente - ADX último: {df['ADX'].iloc[-1]:.2f}, DI+: {df['DIPlus'].iloc[-1]:.2f}, DI-: {df['DIMinus'].iloc[-1]:.2f}")
                 else:
                     print(f"     ⚠️ Datos insuficientes para ADX/DI")
                     adx_disponible = False
+                    # INICIALIZAR COLUMNAS CON CEROS PARA EVITAR ERRORES
+                    df['ADX'] = 0
+                    df['DIPlus'] = 0
+                    df['DIMinus'] = 0
             except Exception as e:
                 print(f"     ⚠️ Error calculando ADX/DI para gráfico: {e}")
                 adx_disponible = False
+                # INICIALIZAR COLUMNAS CON CEROS PARA EVITAR ERRORES
+                df['ADX'] = 0
+                df['DIPlus'] = 0
+                df['DIMinus'] = 0
             
             apds = [
                 mpf.make_addplot(df['Resistencia'], color='#5444ff', linestyle='--', width=2, panel=0),
