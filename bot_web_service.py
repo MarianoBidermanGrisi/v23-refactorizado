@@ -3224,7 +3224,7 @@ class TradingBot:
         if tipo_breakout == "BREAKOUT_LONG":
             if soporte <= precio_actual <= resistencia:
                 distancia_soporte = abs(precio_actual - soporte)
-                if distancia_soporte <= tolerancia and di_plus > di_minus:
+                if distancia_soporte <= tolerancia and di_plus > di_minus and stoch_k > stoch_d:
                     print(f"     ✅ {simbolo} - REENTRY LONG confirmado! Entrada en soporte con Stoch oversold")
                     if simbolo in self.breakouts_detectados:
                         del self.breakouts_detectados[simbolo]
@@ -3232,7 +3232,7 @@ class TradingBot:
         elif tipo_breakout == "BREAKOUT_SHORT":
             if soporte <= precio_actual <= resistencia:
                 distancia_resistencia = abs(precio_actual - resistencia)
-                if distancia_resistencia <= tolerancia and di_minus > di_plus:
+                if distancia_resistencia <= tolerancia and di_minus > di_plus and stoch_k < stoch_d:
                     print(f"     ✅ {simbolo} - REENTRY SHORT confirmado! Entrada en resistencia con Stoch overbought")
                     if simbolo in self.breakouts_detectados:
                         del self.breakouts_detectados[simbolo]
