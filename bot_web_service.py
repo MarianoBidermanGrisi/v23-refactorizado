@@ -2657,6 +2657,8 @@ class TradingBot:
                 'velas_utilizadas': operacion.get('velas_utilizadas', 0),
                 'stoch_k': operacion.get('stoch_k', 0),
                 'stoch_d': operacion.get('stoch_d', 0),
+                'di_plus': operacion.get('di_plus', 0),
+                'di_minus': operacion.get('di_minus', 0),
                 'breakout_usado': operacion.get('breakout_usado', False),
                 'operacion_ejecutada': operacion.get('operacion_ejecutada', False),
                 'reason': reason,
@@ -2867,6 +2869,22 @@ class TradingBot:
         fuerza_texto, nivel_fuerza = self.clasificar_fuerza_tendencia(angulo_tendencia)
         direccion = self.determinar_direccion_tendencia(angulo_tendencia, 1)
         stoch_k, stoch_d = self.calcular_stochastic(datos_mercado)
+
+        # Crear un DataFrame de pandas para poder usar la función calcular_adx_di
+        df_indicadores = pd.DataFrame({
+            'High': datos_mercado['maximos'][-candle_period:],
+            'Low': datos_mercado['minimos'][-candle_period:],
+            'Close': datos_mercado['cierres'][-candle_period:]
+        })
+        
+        # Calcular ADX, DI+ y DI-
+        resultado_adx = calcular_adx_di(df_indicadores['High'], df_indicadores['Low'], df_indicadores['Close'], length=14)
+        
+        # Obtener los valores más recientes
+        di_plus = resultado_adx['di_plus'][-1]
+        di_minus = resultado_adx['di_minus'][-1]
+        adx = resultado_adx['adx'][-1]
+        
         precio_medio = (resistencia_superior + soporte_inferior) / 2
         ancho_canal_absoluto = resistencia_superior - soporte_inferior
         ancho_canal_porcentual = (ancho_canal_absoluto / precio_medio) * 100
@@ -2890,6 +2908,8 @@ class TradingBot:
             'pendiente_soporte': pendiente_min,
             'stoch_k': stoch_k,
             'stoch_d': stoch_d,
+            'di_plus': di_plus,
+            'di_minus': di_minus,
             'timeframe': datos_mercado.get('timeframe', 'N/A'),
             'num_velas': candle_period
         }
@@ -3060,6 +3080,16 @@ class TradingBot:
                     stoch_d_values.append(d)
             df['Stoch_K'] = k_smoothed
             df['Stoch_D'] = stoch_d_values
+            # ... (tu código existente para calcular canal y Stochastic) ...
+            df['Stoch_K'] = k_smoothed
+            df['Stoch_D'] = stoch_d_values
+
+            # Calcular ADX, DI+ y DI-
+            resultado_adx = calcular_adx_di(df['High'], df['Low'], df['Close'], length=14)
+            df['DI+'] = resultado_adx['di_plus']
+            df['DI-'] = resultado_adx['di_minus']
+            df['ADX'] = resultado_adx['adx']
+
             
             # =====================================================
             # NUEVO: Calcular ADX, DI+ y DI- usando la función importada
@@ -3273,6 +3303,31 @@ class TradingBot:
                 if not info_canal:
                     print(f"   ❌ {simbolo} - Error calculando canal")
                     continue
+                                    # ... (código anterior) ...
+                info_canal = self.calcular_canal_regresion_config(datos_mercado, config_optima['num_velas'])
+                if not info_canal:
+                    print(f"   ❌ {simbolo} - Error calculando canal")
+                    continue
+
+                # La función calcular_canal_regresion_config ya debería haberlos calculado
+                # pero los añadimos aquí como una capa de seguridad
+                if 'di_plus' not in info_canal or 'di_minus' not in info_canal:
+                    
+                    df = datos_mercado.get('df')
+                    if df is not None and not df.empty:
+                        # Calcular ADX, DI+ y DI-
+                        resultado_adx = calcular_adx_di(df['High'], df['Low'], df['Close'], length=14)
+                        
+                        # Añadir los valores más recientes al diccionario info_canal
+                        info_canal['di_plus'] = resultado_adx['di_plus'][-1]
+                        info_canal['di_minus'] = resultado_adx['di_minus'][-1]
+                        info_canal['adx'] = resultado_adx['adx'][-1]
+                    else:
+                        # Valores por defecto si no hay DataFrame
+                        info_canal['di_plus'] = 0
+                        info_canal['di_minus'] = 0
+                        info_canal['adx'] = 0
+        
                 estado_stoch = ""
                 if info_canal['stoch_k'] <= 30:
                     estado_stoch = "📉 OVERSOLD"
