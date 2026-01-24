@@ -668,13 +668,13 @@ class BitgetClient:
         logger.error(f"❌ Error creando {order_type}: {response.text}")
         return None
 
-    def place_plan_order(self, symbol, hold_side, trigger_price, plan_type):
-        """
-        Método legacy - ya no usar. Usar place_tpsl_order en su lugar.
-        """
-        # Este método está obsoleto, usar place_tpsl_order
-        logger.warning("⚠️ place_plan_order está obsoleto, usando place_tpsl_order")
-        return None
+   
+   
+   
+   
+   
+   
+   
 
     def get_order_status(self, order_id, symbol):
         """
@@ -937,7 +937,7 @@ class BitgetClient:
                 logger.info(f"✅ Orden ejecutada ({side.upper()}) con TP/SL en modo {'HEDGE' if is_hedged_account else 'UNILATERAL'}")
                 return data.get('data')
             else:
-                # Error 40774: Modo de posición冲突
+                # Error 40774: Modo de posición
                 if data.get('code') == '40774':
                     logger.error(f"❌ Error 40774: La cuenta está en modo {'HEDGE' if not is_hedged_account else 'UNILATERAL'} pero la orden espera el otro modo")
                     logger.error(f"💡 Solución: Verificar configuración de modo de posición en Bitget")
@@ -1340,9 +1340,8 @@ class BitgetClient:
         """Obtener velas (datos de mercado) de BITGET FUTUROS"""
         try:
             interval_map = {
-                '1m': '1m', '3m': '3m', '5m': '5m',
                 '15m': '15m', '30m': '30m', '1h': '1H',
-                '4h': '4H', '1d': '1D'
+                '4h': '4H'
             }
             bitget_interval = interval_map.get(interval, '5m')
             request_path = f'/api/v2/mix/market/candles'
@@ -1539,12 +1538,12 @@ def ejecutar_operacion_bitget(bitget_client, simbolo, tipo_operacion, capital_us
         # 5. Calcular TP y SL (2% SL, 10% TP para mejor RR)
         if tipo_operacion == "LONG":
             sl_porcentaje = 0.02  # 2% Stop Loss
-            tp_porcentaje = 0.10  # 10% Take Profit (RR 5:1)
+            tp_porcentaje = 0.04  # 4% Take Profit (RR 2:1)
             stop_loss = precio_actual * (1 - sl_porcentaje)
             take_profit = precio_actual * (1 + tp_porcentaje)
         else:
             sl_porcentaje = 0.02  # 2% Stop Loss
-            tp_porcentaje = 0.10  # 10% Take Profit (RR 5:1)
+            tp_porcentaje = 0.04  # 10% Take Profit (RR 5:1)
             stop_loss = precio_actual * (1 + sl_porcentaje)
             take_profit = precio_actual * (1 - tp_porcentaje)
         
@@ -1552,17 +1551,27 @@ def ejecutar_operacion_bitget(bitget_client, simbolo, tipo_operacion, capital_us
         # Bitget requiere múltiplos de 0.001 para presetStopLossPrice y presetStopSurplusPrice
         def formatear_precio(price):
             """Formatear precio con precisión apropiada para Bitget (máximo 3 decimales)"""
-            if price >= 1:
-                return f"{price:.3f}"  # 3 decimales para Bitget (múltiplo de 0.001)
-            elif price >= 0.1:
+            if price >= 100:
+                return f"{price:.2f}"  # 2 decimales para Bitget (múltiplo de 0.001)
+            elif price >= 10:
+                return f"{price:.3f}"  # 3 decimales
+            elif price >= 1:
                 return f"{price:.4f}"  # 4 decimales
-            elif price >= 0.01:
+            elif price >= 0.1:
                 return f"{price:.5f}"  # 5 decimales
-            elif price >= 0.001:
+            elif price >= 0.01:
                 return f"{price:.6f}"  # 6 decimales
+            elif price >= 0.001:
+                return f"{price:.7f}"  # 7 decimales
+            elif price >= 0.0001:
+                return f"{price:.8f}"  # 8 decimales
+            elif price >= 0.00001:
+                return f"{price:.9f}"  # 9 decimales
+            elif price >= 0.000001:
+                return f"{price:.10f}"  # 9 decimales
             else:
                 # Para precios muy pequeños como PEPE
-                return f"{price:.8f}".rstrip('0').rstrip('.')
+                return f"{price:.12f}".rstrip('0').rstrip('.')
         
         sl_formatted = formatear_precio(stop_loss)
         tp_formatted = formatear_precio(take_profit)
@@ -1621,7 +1630,7 @@ def ejecutar_operacion_bitget(bitget_client, simbolo, tipo_operacion, capital_us
                 )
         
         if orden_entrada:
-            logger.info("✅ Orden de entrada ejecutada exitosamente con TP/SL integrados")
+            logger.info("✅ Orden exitosa con TP/SL integrados")
         else:
             logger.error("❌ Error abriendo posición en BITGET FUTUROS después de todos los intentos")
             logger.error(f"💡 Error 40774: Verificar configuración de modo de posición en Bitget")
@@ -1721,7 +1730,7 @@ def ejecutar_operacion_bitget(bitget_client, simbolo, tipo_operacion, capital_us
             }
         }
         
-        logger.info(f"✅ OPERACIÓN EJECUTADA EXITOSAMENTE EN BITGET FUTUROS")
+        logger.info(f"✅ OPERACIÓN EJECUTADA EXITOSAMENTE EN BITGET")
         logger.info(f"ID Orden: {orden_entrada.get('orderId', 'N/A')}")
         logger.info(f"Contratos: {cantidad_contratos}")
         logger.info(f"💰 MARGIN USDT usado: ${margin_usdt:.2f} (3% del saldo actual)")
@@ -4213,8 +4222,8 @@ def crear_config_desde_entorno():
         'min_trend_strength_degrees': 16.0,
         'entry_margin': 0.001,
         'min_rr_ratio': 1.2,
-        'scan_interval_minutes': 6,  
-        'timeframes': ['5m', '15m', '30m', '1h', '4h'],
+        'scan_interval_minutes': 5,  
+        'timeframes': ['15m', '30m', '1h', '4h'],
         'velas_options': [80, 100, 120, 150, 200],
         'symbols': [
             # SOLO LOS QUE SÍ FUNCIONARON EN TU LOG (65)
