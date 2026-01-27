@@ -2721,11 +2721,11 @@ class TradingBot:
             else:
                 print(f"   🔄 Reevaluando configuración para {simbolo} (pasó 2 horas)")
         print(f"   🔍 Buscando configuración óptima para {simbolo}...")
-        timeframes = self.config.get('timeframes', ['1m', '3m', '5m', '15m', '30m'])
+        timeframes = self.config.get('timeframes', ['15m', '30m', '1h', '4h'])
         velas_options = self.config.get('velas_options', [80, 100, 120, 150, 200])
         mejor_config = None
         mejor_puntaje = -999999
-        prioridad_timeframe = {'1m': 200, '3m': 150, '5m': 120, '15m': 100, '30m': 80}
+        prioridad_timeframe = {'15m': 200, '15m': 150, '15m': 120, '15m': 100, '30m': 80}
         for timeframe in timeframes:
             for num_velas in velas_options:
                 try:
@@ -3021,28 +3021,7 @@ class TradingBot:
                         })
                     df = pd.DataFrame(df_data)
                     df.set_index('Date', inplace=True)
-            else:
-                # Fallback a Binance
-                url = "https://api.binance.com/api/v3/klines"
-                params = {
-                    'symbol': simbolo,
-                    'interval': config_optima['timeframe'],
-                    'limit': config_optima['num_velas']
-                }
-                respuesta = requests.get(url, params=params, timeout=10)
-                klines = respuesta.json()
-                df_data = []
-                for kline in klines:
-                    df_data.append({
-                        'Date': pd.to_datetime(kline[0], unit='ms'),
-                        'Open': float(kline[1]),
-                        'High': float(kline[2]),
-                        'Low': float(kline[3]),
-                        'Close': float(kline[4]),
-                        'Volume': float(kline[5])
-                    })
-                df = pd.DataFrame(df_data)
-                df.set_index('Date', inplace=True)
+          
             
             # Calcular líneas del canal
             tiempos_reg = list(range(len(df)))
@@ -3131,8 +3110,8 @@ class TradingBot:
             # Stochastic
             apds.append(mpf.make_addplot(df['Stoch_K'], color='#00BFFF', width=1.5, panel=1, ylabel='Stochastic'))
             apds.append(mpf.make_addplot(df['Stoch_D'], color='#FF6347', width=1.5, panel=1))
-            overbought = [80] * len(df)
-            oversold = [20] * len(df)
+            overbought = [20] * len(df)
+            oversold = [80] * len(df)
             apds.append(mpf.make_addplot(overbought, color="#E7E4E4", linestyle='--', width=0.8, panel=1, alpha=0.5))
             apds.append(mpf.make_addplot(oversold, color="#E9E4E4", linestyle='--', width=0.8, panel=1, alpha=0.5))
             
