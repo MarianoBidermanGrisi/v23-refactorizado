@@ -18,6 +18,28 @@ import random
 import matplotlib
 matplotlib.use('Agg')  # Backend sin GUI
 import matplotlib.pyplot as plt
+import matplotlib.font_manager as fm
+import warnings
+
+# Configuración de matplotlib para evitar errores de fuentes
+# Usar fuente por defecto del sistema que soporte más caracteres
+try:
+    # Intentar encontrar una fuente con soporte Unicode amplio
+    fonts = [f.name for f in fm.fontManager.ttflist]
+    if 'Noto Sans CJK SC' in fonts:
+        plt.rcParams['font.sans-serif'] = ['Noto Sans CJK SC', 'DejaVu Sans', 'Arial Unicode MS', 'sans-serif']
+    elif 'DejaVu Sans' in fonts:
+        plt.rcParams['font.sans-serif'] = ['DejaVu Sans', 'Arial Unicode MS', 'sans-serif']
+    else:
+        plt.rcParams['font.sans-serif'] = ['Arial Unicode MS', 'sans-serif']
+except:
+    plt.rcParams['font.sans-serif'] = ['Arial Unicode MS', 'sans-serif']
+
+plt.rcParams['axes.unicode_minus'] = False  # Manejar correctamente el signo menos
+
+# Silenciar warnings de fuentes específicos (no críticos para el funcionamiento)
+warnings.filterwarnings('ignore', category=UserWarning, module='matplotlib')
+
 import mplfinance as mpf
 import pandas as pd
 from io import BytesIO
@@ -144,32 +166,31 @@ def calcular_adx_di(high, low, close, length=14):
                 directional_movement_minus[i]
             )
     
-    # Evitar división por cero
-    safe_tr = np.where(smoothed_true_range == 0, np.nan, smoothed_true_range)
-    
-    # DIPlus = SmoothedDirectionalMovementPlus / SmoothedTrueRange * 100
-    di_plus = np.where(
-        np.isnan(safe_tr),
-        np.nan,
-        (smoothed_dm_plus / smoothed_true_range) * 100
-    )
-    
-    # DIMinus = SmoothedDirectionalMovementMinus / SmoothedTrueRange * 100
-    di_minus = np.where(
-        np.isnan(safe_tr),
-        np.nan,
-        (smoothed_dm_minus / smoothed_true_range) * 100
-    )
-    
-    # DX = abs(DIPlus-DIMinus) / (DIPlus+DIMinus)*100
-    di_sum = np.nan_to_num(di_plus) + np.nan_to_num(di_minus)
-    di_diff = np.abs(np.nan_to_num(di_plus) - np.nan_to_num(di_minus))
-    
-    dx = np.where(
-        di_sum == 0,
-        0,
-        (di_diff / di_sum) * 100
-    )
+    # Evitar división por cero - usar errstate para silenciar warnings
+    with np.errstate(divide='ignore', invalid='ignore'):
+        # DIPlus = SmoothedDirectionalMovementPlus / SmoothedTrueRange * 100
+        di_plus = np.where(
+            smoothed_true_range == 0,
+            np.nan,
+            (smoothed_dm_plus / smoothed_true_range) * 100
+        )
+        
+        # DIMinus = SmoothedDirectionalMovementMinus / SmoothedTrueRange * 100
+        di_minus = np.where(
+            smoothed_true_range == 0,
+            np.nan,
+            (smoothed_dm_minus / smoothed_true_range) * 100
+        )
+        
+        # DX = abs(DIPlus-DIMinus) / (DIPlus+DIMinus)*100
+        di_sum = np.nan_to_num(di_plus) + np.nan_to_num(di_minus)
+        di_diff = np.abs(np.nan_to_num(di_plus) - np.nan_to_num(di_minus))
+        
+        dx = np.where(
+            di_sum == 0,
+            0,
+            (di_diff / di_sum) * 100
+        )
     
     # ADX = sma(DX, length) - Media móvil simple de DX
     for i in range(n):
