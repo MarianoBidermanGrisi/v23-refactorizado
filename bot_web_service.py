@@ -18,28 +18,6 @@ import random
 import matplotlib
 matplotlib.use('Agg')  # Backend sin GUI
 import matplotlib.pyplot as plt
-import matplotlib.font_manager as fm
-import warnings
-
-# Configuración de matplotlib para evitar errores de fuentes
-# Usar fuente por defecto del sistema que soporte más caracteres
-try:
-    # Intentar encontrar una fuente con soporte Unicode amplio
-    fonts = [f.name for f in fm.fontManager.ttflist]
-    if 'Noto Sans CJK SC' in fonts:
-        plt.rcParams['font.sans-serif'] = ['Noto Sans CJK SC', 'DejaVu Sans', 'Arial Unicode MS', 'sans-serif']
-    elif 'DejaVu Sans' in fonts:
-        plt.rcParams['font.sans-serif'] = ['DejaVu Sans', 'Arial Unicode MS', 'sans-serif']
-    else:
-        plt.rcParams['font.sans-serif'] = ['Arial Unicode MS', 'sans-serif']
-except:
-    plt.rcParams['font.sans-serif'] = ['Arial Unicode MS', 'sans-serif']
-
-plt.rcParams['axes.unicode_minus'] = False  # Manejar correctamente el signo menos
-
-# Silenciar warnings de fuentes específicos (no críticos para el funcionamiento)
-warnings.filterwarnings('ignore', category=UserWarning, module='matplotlib')
-
 import mplfinance as mpf
 import pandas as pd
 from io import BytesIO
@@ -166,31 +144,32 @@ def calcular_adx_di(high, low, close, length=14):
                 directional_movement_minus[i]
             )
     
-    # Evitar división por cero - usar errstate para silenciar warnings
-    with np.errstate(divide='ignore', invalid='ignore'):
-        # DIPlus = SmoothedDirectionalMovementPlus / SmoothedTrueRange * 100
-        di_plus = np.where(
-            smoothed_true_range == 0,
-            np.nan,
-            (smoothed_dm_plus / smoothed_true_range) * 100
-        )
-        
-        # DIMinus = SmoothedDirectionalMovementMinus / SmoothedTrueRange * 100
-        di_minus = np.where(
-            smoothed_true_range == 0,
-            np.nan,
-            (smoothed_dm_minus / smoothed_true_range) * 100
-        )
-        
-        # DX = abs(DIPlus-DIMinus) / (DIPlus+DIMinus)*100
-        di_sum = np.nan_to_num(di_plus) + np.nan_to_num(di_minus)
-        di_diff = np.abs(np.nan_to_num(di_plus) - np.nan_to_num(di_minus))
-        
-        dx = np.where(
-            di_sum == 0,
-            0,
-            (di_diff / di_sum) * 100
-        )
+    # Evitar división por cero
+    safe_tr = np.where(smoothed_true_range == 0, np.nan, smoothed_true_range)
+    
+    # DIPlus = SmoothedDirectionalMovementPlus / SmoothedTrueRange * 100
+    di_plus = np.where(
+        np.isnan(safe_tr),
+        np.nan,
+        (smoothed_dm_plus / smoothed_true_range) * 100
+    )
+    
+    # DIMinus = SmoothedDirectionalMovementMinus / SmoothedTrueRange * 100
+    di_minus = np.where(
+        np.isnan(safe_tr),
+        np.nan,
+        (smoothed_dm_minus / smoothed_true_range) * 100
+    )
+    
+    # DX = abs(DIPlus-DIMinus) / (DIPlus+DIMinus)*100
+    di_sum = np.nan_to_num(di_plus) + np.nan_to_num(di_minus)
+    di_diff = np.abs(np.nan_to_num(di_plus) - np.nan_to_num(di_minus))
+    
+    dx = np.where(
+        di_sum == 0,
+        0,
+        (di_diff / di_sum) * 100
+    )
     
     # ADX = sma(DX, length) - Media móvil simple de DX
     for i in range(n):
@@ -3197,133 +3176,58 @@ class TradingBot:
 
     def detectar_reentry(self, simbolo, info_canal, datos_mercado):
         """
-        Detecta si el precio ha REINGRESADO al canal.
+        Detecta si el precio ha REINGRESADO al canal Y genera señales según REGLAS DE ORO:
+        - LONG: di_minus < di_plus AND stoch_k > stoch_d
+        - SHORT: di_minus > di_plus AND stoch_k < stoch_d
         
-        APLICACIÓN ESTRICTA DE LAS REGLAS DE ORO:
-        📈 LONG: distancia_soporte <= tolerancia AND di_minus < di_plus AND stoch_k > stoch_d
-        📉 SHORT: distancia_resistencia <= tolerancia AND di_minus > di_plus AND stoch_k < stoch_d
-        
-        CRÍTICO:
-        - Para LONG: el precio DEBE estar cerca del SOPORTE (zona inferior del canal)
-        - Para SHORT: el precio DEBE estar cerca de la RESISTENCIA (zona superior del canal)
+        IMPORTANTE: La verificación de DI es OBLIGATORIA y debe cumplirse SIEMPRE.
         """
-        if simbolo not in self.esperando_reentry:
-            return None
-        
-        breakout_info = self.esperando_reentry[simbolo]
-        tipo_breakout = breakout_info['tipo']
-        timestamp_breakout = breakout_info['timestamp']
-        tiempo_desde_breakout = (datetime.now() - timestamp_breakout).total_seconds() / 60
-        
-        # Timeout de reentry (30 minutos)
-        if tiempo_desde_breakout > 30:
-            print(f"     ⏰ {simbolo} - Timeout de reentry ({tiempo_desde_breakout:.1f} min), cancelando espera")
-            del self.esperando_reentry[simbolo]
-            if simbolo in self.breakouts_detectados:
-                del self.breakouts_detectados[simbolo]
-            return None
-        
-        precio_actual = datos_mercado['precio_actual']
-        resistencia = info_canal['resistencia']
-        soporte = info_canal['soporte']
-        ancho_canal = resistencia - soporte
-        
-        # Validación básica del canal
-        if ancho_canal <= 0:
-            return None
-        
-        # Calcular tolerancia como % del ancho del canal (0.1% del canal)
-        tolerancia = ancho_canal * 0.001
-        
-        # Extraer indicadores
+        # Extraer valores de info_canal
         stoch_k = info_canal['stoch_k']
         stoch_d = info_canal['stoch_d']
-        di_plus = info_canal['di_plus']
-        di_minus = info_canal['di_minus']
+        di_plus = info_canal.get('di_plus', 25)
+        di_minus = info_canal.get('di_minus', 25)
+        angulo = info_canal['angulo_tendencia']
         
-        # DEBUG: Mostrar valores para diagnóstico
-        print(f"   🔍 {simbolo} - Reentry Debug:")
-        print(f"      Precio: {precio_actual:.4f} | Soporte: {soporte:.4f} | Resistencia: {resistencia:.4f}")
-        print(f"      Ancho Canal: {ancho_canal:.4f} ({info_canal['ancho_canal_porcentual']:.1f}%)")
-        print(f"      Tolerancia: {tolerancia:.4f}")
-        print(f"      DI+: {di_plus:.2f} | DI-: {di_minus:.2f}")
-        print(f"      Stoch K: {stoch_k:.1f} | Stoch D: {stoch_d:.1f}")
+        # Verificar condiciones de Stochastic
+        es_long_stoch = stoch_k > stoch_d
+        es_short_stoch = stoch_k < stoch_d
         
-        # === REGLAS DE ORO ESTRICTAS ===
+        # Verificar condiciones de DI (OBLIGATORIO PARA REGLAS DE ORO)
+        condicion_di_long = di_plus > di_minus
+        condicion_di_short = di_minus > di_plus
         
-        # 📈 REGLA DE ORO PARA LONG
-        # Precio debe estar cerca del SOPORTE (zona inferior)
-        # Tendencia alcista: di_minus < di_plus
-        # Momentum alcista: stoch_k > stoch_d
-        if tipo_breakout == "BREAKOUT_LONG":
-            # Verificar que el precio esté dentro del canal
-            if soporte <= precio_actual <= resistencia:
-                distancia_soporte = abs(precio_actual - soporte)
-                distancia_resistencia = abs(precio_actual - resistencia)
-                
-                # Verificar que el precio esté cerca del soporte, NO de la resistencia
-                cerca_soporte = distancia_soporte <= tolerancia
-                lejos_resistencia = distancia_resistencia > tolerancia * 2  # Al menos 2x más lejos de la resistencia
-                
-                cumple_di = di_minus < di_plus
-                cumple_stoch = stoch_k > stoch_d
-                
-                print(f"      📈 LONG: cerca_soporte={cerca_soporte} | lejos_resistencia={lejos_resistencia}")
-                print(f"               DI- < DI+={cumple_di} | StochK>StochD={cumple_stoch}")
-                
-                if cerca_soporte and lejos_resistencia and cumple_di and cumple_stoch:
-                    print(f"     ✅ {simbolo} - REENTRY LONG CONFIRMADO (Reglas de Oro)")
-                    print(f"         Precio cerca del soporte, lejos de resistencia")
-                    if simbolo in self.breakouts_detectados:
-                        del self.breakouts_detectados[simbolo]
-                    return "LONG"
-                else:
-                    if not cerca_soporte:
-                        print(f"     ❌ LONG RECHAZADO: Precio no cerca del soporte ({distancia_soporte:.4f} > {tolerancia:.4f})")
-                    elif not lejos_resistencia:
-                        print(f"     ❌ LONG RECHAZADO: Precio ambiguo (cerca de ambos niveles)")
-                    elif not cumple_di:
-                        print(f"     ❌ LONG RECHAZADO: DI- ({di_minus:.2f}) >= DI+ ({di_plus:.2f})")
-                    elif not cumple_stoch:
-                        print(f"     ❌ LONG RECHAZADO: StochK ({stoch_k:.1f}) <= StochD ({stoch_d:.1f})")
+        # Determinar dirección válida según ángulo Y DI
+        es_long_tendencia = angulo > 0 and condicion_di_long
+        es_short_tendencia = angulo < 0 and condicion_di_short
         
-        # 📉 REGLA DE ORO PARA SHORT
-        # Precio debe estar cerca de la RESISTENCIA (zona superior)
-        # Tendencia bajista: di_minus > di_plus
-        # Momentum bajista: stoch_k < stoch_d
-        elif tipo_breakout == "BREAKOUT_SHORT":
-            # Verificar que el precio esté dentro del canal
-            if soporte <= precio_actual <= resistencia:
-                distancia_soporte = abs(precio_actual - soporte)
-                distancia_resistencia = abs(precio_actual - resistencia)
-                
-                # Verificar que el precio esté cerca de la resistencia, NO del soporte
-                cerca_resistencia = distancia_resistencia <= tolerancia
-                lejos_soporte = distancia_soporte > tolerancia * 2  # Al menos 2x más lejos del soporte
-                
-                cumple_di = di_minus > di_plus
-                cumple_stoch = stoch_k < stoch_d
-                
-                print(f"      📉 SHORT: cerca_resistencia={cerca_resistencia} | lejos_soporte={lejos_soporte}")
-                print(f"                DI- > DI+={cumple_di} | StochK<StochD={cumple_stoch}")
-                
-                if cerca_resistencia and lejos_soporte and cumple_di and cumple_stoch:
-                    print(f"     ✅ {simbolo} - REENTRY SHORT CONFIRMADO (Reglas de Oro)")
-                    print(f"         Precio cerca de la resistencia, lejos del soporte")
-                    if simbolo in self.breakouts_detectados:
-                        del self.breakouts_detectados[simbolo]
-                    return "SHORT"
-                else:
-                    if not cerca_resistencia:
-                        print(f"     ❌ SHORT RECHAZADO: Precio no cerca de la resistencia ({distancia_resistencia:.4f} > {tolerancia:.4f})")
-                    elif not lejos_soporte:
-                        print(f"     ❌ SHORT RECHAZADO: Precio ambiguo (cerca de ambos niveles)")
-                    elif not cumple_di:
-                        print(f"     ❌ SHORT RECHAZADO: DI- ({di_minus:.2f}) <= DI+ ({di_plus:.2f})")
-                    elif not cumple_stoch:
-                        print(f"     ❌ SHORT RECHAZADO: StochK ({stoch_k:.1f}) >= StochD ({stoch_d:.1f})")
+        # Logs de debug para verificar cumplimiento de reglas de oro
+        print(f"     🔍 {simbolo} - DI+: {di_plus:.2f}, DI-: {di_minus:.2f}")
+        print(f"     🔍 {simbolo} - Stochastic: K={stoch_k:.2f}, D={stoch_d:.2f}")
+        print(f"     🔍 {simbolo} - Ángulo: {angulo:.2f}° | DI LONG: {condicion_di_long} | DI SHORT: {condicion_di_short}")
+        print(f"     🔍 {simbolo} - Tendencia LONG: Stoch={es_long_stoch}, DI={es_long_tendencia}")
+        print(f"     🔍 {simbolo} - Tendencia SHORT: Stoch={es_short_stoch}, DI={es_short_tendencia}")
         
-        return None
+        # REGLAS DE ORO: Ambas condiciones DEBEN cumplirse para generar señal
+        if es_long_stoch and es_long_tendencia:
+            print(f"     ✅ {simbolo} - SEÑAL LONG CONFIRMADA (DI+>{di_plus:.2f}>{di_minus:.2f}=DI- & Stoch K>{stoch_k:.2f}>{stoch_d:.2f}=D)")
+            return "LONG"
+        elif es_short_stoch and es_short_tendencia:
+            print(f"     ✅ {simbolo} - SEÑAL SHORT CONFIRMADA (DI->{di_minus:.2f}>{di_plus:.2f}=DI+ & Stoch K<{stoch_k:.2f}<{stoch_d:.2f}=D)")
+            return "SHORT"
+        else:
+            # Log detallado de por qué se rechazó la señal
+            if es_long_stoch and not es_long_tendencia:
+                if not condicion_di_long:
+                    print(f"     ❌ {simbolo} - LONG RECHAZADO: DI+ NO > DI- ({di_plus:.2f} <= {di_minus:.2f}) - VIOLA REGLAS DE ORO")
+                if angulo <= 0:
+                    print(f"     ❌ {simbolo} - LONG RECHAZADO: Ángulo NO positivo ({angulo:.2f}°)")
+            if es_short_stoch and not es_short_tendencia:
+                if not condicion_di_short:
+                    print(f"     ❌ {simbolo} - SHORT RECHAZADO: DI- NO > DI+ ({di_minus:.2f} <= {di_plus:.2f}) - VIOLA REGLAS DE ORO")
+                if angulo >= 0:
+                    print(f"     ❌ {simbolo} - SHORT RECHAZADO: Ángulo NO negativo ({angulo:.2f}°)")
+            return None
 
     def calcular_niveles_entrada(self, tipo_operacion, info_canal, precio_actual):
         """Calcula niveles de entrada, SL y TP.
@@ -3331,47 +3235,12 @@ class TradingBot:
         El TP se coloca en el ANCHO COMPLETO DEL CANAL (lado opuesto):
         - LONG: TP en la resistencia (límite superior del canal)
         - SHORT: TP en el soporte (límite inferior del canal)
-        
-        Includes VALIDACIÓN DE CONSISTENCIA:
-        - Para LONG: el precio debe estar cerca del soporte (no de la resistencia)
-        - Para SHORT: el precio debe estar cerca de la resistencia (no del soporte)
         """
         if not info_canal:
             return None, None, None
-        
         resistencia = info_canal['resistencia']
         soporte = info_canal['soporte']
         ancho_canal = resistencia - soporte
-        
-        # === VALIDACIÓN DE CONSISTENCIA ===
-        # Verificar que el precio esté en la zona correcta del canal
-        distancia_soporte = abs(precio_actual - soporte)
-        distancia_resistencia = abs(precio_actual - resistencia)
-        tolerancia = ancho_canal * 0.001  # 0.1% del ancho del canal
-        
-        if tipo_operacion == "LONG":
-            # Para LONG, el precio debe estar cerca del soporte
-            cerca_soporte = distancia_soporte <= tolerancia
-            lejos_resistencia = distancia_resistencia > tolerancia * 2
-            
-            if not (cerca_soporte and lejos_resistencia):
-                print(f"    ❌ {self.simbolo if hasattr(self, 'simbolo') else 'N/A'}: LONG inválido")
-                print(f"         Dist. Soporte: {distancia_soporte:.4f} | Dist. Resistencia: {distancia_resistencia:.4f}")
-                print(f"         El precio debe estar cerca del soporte, lejos de la resistencia")
-                return None, None, None
-                
-        elif tipo_operacion == "SHORT":
-            # Para SHORT, el precio debe estar cerca de la resistencia
-            cerca_resistencia = distancia_resistencia <= tolerancia
-            lejos_soporte = distancia_soporte > tolerancia * 2
-            
-            if not (cerca_resistencia and lejos_soporte):
-                print(f"    ❌ {self.simbolo if hasattr(self, 'simbolo') else 'N/A'}: SHORT inválido")
-                print(f"         Dist. Resistencia: {distancia_resistencia:.4f} | Dist. Soporte: {distancia_soporte:.4f}")
-                print(f"         El precio debe estar cerca de la resistencia, lejos del soporte")
-                return None, None, None
-        
-        # === CÁLCULO DE NIVELES ===
         sl_porcentaje = 0.02
         
         if tipo_operacion == "LONG":
@@ -3561,29 +3430,7 @@ class TradingBot:
         ratio_rr = beneficio / riesgo if riesgo > 0 else 0
         sl_percent = abs((sl - precio_entrada) / precio_entrada) * 100
         tp_percent = abs((tp - precio_entrada) / precio_entrada) * 100
-        
-        # CORRECCIÓN: Mostrar estado correcto del Stochastic según K y D
-        stoch_k = info_canal['stoch_k']
-        stoch_d = info_canal['stoch_d']
-        if tipo_operacion == "LONG":
-            if stoch_k > stoch_d:
-                stoch_estado = f"📉 SOBREVENTA (K={stoch_k:.1f} > D={stoch_d:.1f}) ✅ CONFIRMADO"
-            else:
-                stoch_estado = f"⚠️ ATENCIÓN (K={stoch_k:.1f} <= D={stoch_d:.1f})"
-        else:  # SHORT
-            if stoch_k < stoch_d:
-                stoch_estado = f"📈 SOBRECOMPRA (K={stoch_k:.1f} < D={stoch_d:.1f}) ✅ CONFIRMADO"
-            else:
-                stoch_estado = f"⚠️ ATENCIÓN (K={stoch_k:.1f} >= D={stoch_d:.1f})"
-        
-        # Mostrar también DI+ y DI-
-        di_plus = info_canal.get('di_plus', 0)
-        di_minus = info_canal.get('di_minus', 0)
-        if tipo_operacion == "LONG":
-            di_estado = f"DI-={di_minus:.1f} < DI+={di_plus:.1f} ✅" if di_minus < di_plus else f"DI-={di_minus:.1f} >= DI+={di_plus:.1f} ⚠️"
-        else:
-            di_estado = f"DI-={di_minus:.1f} > DI+={di_plus:.1f} ✅" if di_minus > di_plus else f"DI-={di_minus:.1f} <= DI+={di_plus:.1f} ⚠️"
-        
+        stoch_estado = "📉 SOBREVENTA" if tipo_operacion == "LONG" else "📈 SOBRECOMPRA"
         breakout_texto = ""
         if breakout_info:
             tiempo_breakout = (datetime.now() - breakout_info['timestamp']).total_seconds() / 60
@@ -3616,7 +3463,6 @@ class TradingBot:
 🎰 <b>Stochástico:</b> {stoch_estado}
 📊 <b>Stoch K:</b> {info_canal['stoch_k']:.1f}
 📈 <b>Stoch D:</b> {info_canal['stoch_d']:.1f}
-📊 <b>DI+ / DI-:</b> {di_estado}
 ⏰ <b>Hora:</b> {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
 💡 <b>Estrategia:</b> BREAKOUT + REENTRY con confirmación Stochastic
         """
