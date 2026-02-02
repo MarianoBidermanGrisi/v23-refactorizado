@@ -151,14 +151,14 @@ def calcular_adx_di(high, low, close, length=14):
     di_plus = np.where(
         np.isnan(safe_tr),
         np.nan,
-        (smoothed_dm_plus / smoothed_true_range) * 100
+        (smoothed_dm_plus / np.where(smoothed_true_range == 0, np.nan, smoothed_true_range)) * 100
     )
     
     # DIMinus = SmoothedDirectionalMovementMinus / SmoothedTrueRange * 100
     di_minus = np.where(
         np.isnan(safe_tr),
         np.nan,
-        (smoothed_dm_minus / smoothed_true_range) * 100
+        (smoothed_dm_minus / np.where(smoothed_true_range == 0, np.nan, smoothed_true_range))  * 100
     )
     
     # DX = abs(DIPlus-DIMinus) / (DIPlus+DIMinus)*100
