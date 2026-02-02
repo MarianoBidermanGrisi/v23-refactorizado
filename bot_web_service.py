@@ -168,7 +168,7 @@ def calcular_adx_di(high, low, close, length=14):
     dx = np.where(
         di_sum == 0,
         0,
-        (di_diff / di_sum) * 100
+        (di_diff / np.where(di_sum == 0, np.nan, di_sum)) * 100
     )
     
     # ADX = sma(DX, length) - Media móvil simple de DX
