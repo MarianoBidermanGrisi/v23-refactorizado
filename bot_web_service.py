@@ -1939,8 +1939,8 @@ class TradingBot:
                 self.operaciones_activas = estado.get('operaciones_activas', {})
                 self.senales_enviadas = set(estado.get('senales_enviadas', []))
                 print("✅ Estado anterior cargado correctamente")
-                print(f"   📊 Operaciones activas: {len(self.operaciones_activas)}")
-                print(f"   🔴 Esperando reentry: {len(self.esperando_reentry)}")
+                print(f"    Operaciones activas: {len(self.operaciones_activas)}")
+                print(f"    Esperando reentry: {len(self.esperando_reentry)}")
         except Exception as e:
             print(f"⚠ Error cargando estado previo: {e}")
             print("   Se iniciará con estado limpio")
@@ -3334,7 +3334,7 @@ class TradingBot:
                 
             else:
                 color_breakout = '#D68F01'
-                titulo_extra = "🔴 RUPTURA BAJISTA"
+                titulo_extra = " RUPTURA BAJISTA"
             apds.append(mpf.make_addplot(breakout_line, color=color_breakout, linestyle='-', width=3, panel=0, alpha=0.8))
             # Stochastic
             apds.append(mpf.make_addplot(df['Stoch_K'], color='#00BFFF', width=1.5, panel=1, ylabel='Stochastic'))
@@ -3356,7 +3356,7 @@ class TradingBot:
             
             # Crear gráfico
             fig, axes = mpf.plot(df, type='candle', style='nightclouds',
-                               title=f'{simbolo} | {titulo_extra} | {config_optima["timeframe"]} | 🔴 ESPERANDO REENTRY',
+                               title=f'{simbolo} | {titulo_extra} | {config_optima["timeframe"]} |  ESPERANDO REENTRY',
                                ylabel='Precio',
                                addplot=apds,
                                volume=False,
@@ -3412,7 +3412,7 @@ class TradingBot:
                 return "BREAKOUT_LONG"
         elif direccion == "BAJISTA" and nivel_fuerza >= 2:
             if precio_cierre > resistencia:  # Precio rompió hacia arriba la resistencia
-                print(f"     🔴 {simbolo} - BREAKOUT SHORT: {precio_cierre:.8f} > Resistencia: {resistencia:.8f}")
+                print(f"      {simbolo} - BREAKOUT SHORT: {precio_cierre:.8f} > Resistencia: {resistencia:.8f}")
                 return "BREAKOUT_SHORT"
         return None
 
