@@ -2250,7 +2250,7 @@ class TradingBot:
                 except (KeyError, TypeError, ValueError):
                     return 0
 
-            self.moned = sorted(filtrados, key=get_quote_volume, reverse=True)[:100]
+            self.moned = sorted(filtrados, key=get_quote_volume, reverse=True)[:200]
             self.ultima_actualizacion_moned = datetime.now()
 
             print(f"[SISTEMA] ✅ 100 Monedas actualizadas dinámicamente (Top Volumen)")
@@ -4524,7 +4524,7 @@ def crear_config_desde_entorno():
         'min_trend_strength_degrees': 16.0,
         'entry_margin': 0.001,
         'min_rr_ratio': 1.2,
-        'scan_interval_minutes': 5,  
+        'scan_interval_minutes': 10,  
         'timeframes': ['15m', '30m', '1h', '4h'],
         'velas_options': [80, 100, 120, 150, 200],
         # Símbolos vacíos - Se generarán dinámicamente en actualizar_moned()
