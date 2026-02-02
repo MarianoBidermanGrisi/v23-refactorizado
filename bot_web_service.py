@@ -158,7 +158,7 @@ def calcular_adx_di(high, low, close, length=14):
     di_minus = np.where(
         np.isnan(safe_tr),
         np.nan,
-        (smoothed_dm_minus / np.where(smoothed_true_range == 0, np.nan, smoothed_true_range))  * 100
+        (smoothed_dm_minus / np.where(smoothed_true_range == 0, np.nan, smoothed_true_range)) * 100
     )
     
     # DX = abs(DIPlus-DIMinus) / (DIPlus+DIMinus)*100
@@ -569,16 +569,16 @@ class BitgetClient:
             # Primero obtener la info del símbolo
             symbol_info = self.get_symbol_info(symbol)
             if not symbol_info:
-                logger.warning(f"No se pudo obtener info de {symbol}, usando leverage 10x por defecto")
+                logger.warning(f"No se pudo obtener info de {symbol}, usando leverage 20x por defecto")
                 return 20
             
             # Obtener el leverage máximo del exchange
             # La API de Bitget devuelve 'openMaxLeverage' en la info del contrato
-            max_leverage = symbol_info.get('openMaxLeverage', 10)
+            max_leverage = symbol_info.get('openMaxLeverage', 20)
             
             # Asegurar que sea un valor válido
             if not max_leverage or max_leverage < 1:
-                max_leverage = 10
+                max_leverage = 20
             
             logger.info(f"📊 {symbol}: Apalancamiento máximo permitido = {max_leverage}x")
             return int(max_leverage)
@@ -1482,7 +1482,7 @@ def ejecutar_operacion_bitget(bitget_client, simbolo, tipo_operacion, capital_us
         dict con información de la operación ejecutada
     """
     
-    logger.info(f" EJECUTANDO OPERACIÓN REAL EN BITGET FUTUROS")
+    logger.info(f"🚀 EJECUTANDO OPERACIÓN REAL EN BITGET FUTUROS")
     logger.info(f"Símbolo: {simbolo}")
     logger.info(f"Tipo: {tipo_operacion}")
     
@@ -1882,7 +1882,7 @@ class TradingBot:
         # Configuración de operaciones automáticas
         self.ejecutar_operaciones_automaticas = config.get('ejecutar_operaciones_automaticas', False)
         self.capital_por_operacion = config.get('capital_por_operacion', None)  # 3% del saldo (dinámico)
-        self.leverage_por_defecto = config.get('leverage_por_defecto', 10)  # 10x apalancamiento
+        self.leverage_por_defecto = config.get('leverage_por_defecto', 20)  # 20x apalancamiento
         
         parametros_optimizados = None
         if self.auto_optimize:
@@ -1939,8 +1939,8 @@ class TradingBot:
                 self.operaciones_activas = estado.get('operaciones_activas', {})
                 self.senales_enviadas = set(estado.get('senales_enviadas', []))
                 print("✅ Estado anterior cargado correctamente")
-                print(f"    Operaciones activas: {len(self.operaciones_activas)}")
-                print(f"    Esperando reentry: {len(self.esperando_reentry)}")
+                print(f"   📊 Operaciones activas: {len(self.operaciones_activas)}")
+                print(f"   ⏳ Esperando reentry: {len(self.esperando_reentry)}")
         except Exception as e:
             print(f"⚠ Error cargando estado previo: {e}")
             print("   Se iniciará con estado limpio")
@@ -2452,7 +2452,7 @@ class TradingBot:
                                 # La operación fue abierta hace menos de 5 minutos
                                 # Bitget puede tener delay, no liberarla aún
                                 operaciones_recientes.append((simbolo, minutos_desde_entrada))
-                                logger.info(f"🔴 {simbolo}: operación reciente ({minutos_desde_entrada:.1f} min), esperando sincronización...")
+                                logger.info(f"⏳ {simbolo}: operación reciente ({minutos_desde_entrada:.1f} min), esperando sincronización...")
                                 continue
                         except Exception:
                             pass
@@ -2466,7 +2466,7 @@ class TradingBot:
                 
                 # Reportar operaciones recientes
                 if operaciones_recientes:
-                    logger.info(f"🔴 {len(operaciones_recientes)} operaciones recientes esperando sincronización:")
+                    logger.info(f"⏳ {len(operaciones_recientes)} operaciones recientes esperando sincronización:")
                     for simbolo, minutos in operaciones_recientes:
                         logger.info(f"   • {simbolo}: {minutos:.1f} minutos desde apertura")
                     logger.info(f"   💡 Esperando {intervalo_tolerancia_minutos - max(m[1] for m in operaciones_recientes):.1f} minutos más para sincronización...")
@@ -2546,7 +2546,7 @@ class TradingBot:
                                 # La operación fue abierta hace menos de 5 minutos
                                 # Bitget puede tener delay, no marcarla como cerrada
                                 operaciones_pendientes_sincronizacion.append((simbolo, minutos_desde_entrada))
-                                logger.info(f"🔴 {simbolo}: operación reciente ({minutos_desde_entrada:.1f} min), omitiendo verificación...")
+                                logger.info(f"⏳ {simbolo}: operación reciente ({minutos_desde_entrada:.1f} min), omitiendo verificación...")
                                 continue
                         except Exception:
                             pass
@@ -2574,7 +2574,7 @@ class TradingBot:
             
             # Reportar operaciones pendientes de sincronización
             if operaciones_pendientes_sincronizacion:
-                logger.info(f"🔴 {len(operaciones_pendientes_sincronizacion)} operaciones recientes pendientes de sincronización:")
+                logger.info(f"⏳ {len(operaciones_pendientes_sincronizacion)} operaciones recientes pendientes de sincronización:")
                 for simbolo, minutos in operaciones_pendientes_sincronizacion:
                     logger.info(f"   • {simbolo}: {minutos:.1f} minutos desde apertura")
                 logger.info(f"   💡 Estas operaciones serán verificadas en el próximo ciclo de sincronización")
@@ -3162,14 +3162,14 @@ class TradingBot:
         direccion_canal = info_canal['direccion']
         # Determinar tipo de ruptura
         if tipo_breakout == "BREAKOUT_LONG":
-            
+            emoji_principal = "🚀"
             tipo_texto = "RUPTURA de SOPORTE"
             nivel_roto = f"Soporte: {soporte:.8f}"
             direccion_emoji = "⬇️"
             contexto = f"Canal {direccion_canal} → Ruptura de SOPORTE"
             expectativa = "posible entrada en long si el precio reingresa al canal"
         else:  # BREAKOUT_SHORT
-            emoji_principal = "🔴"
+            emoji_principal = "📉"
             tipo_texto = "RUPTURA BAJISTA de RESISTENCIA"
             nivel_roto = f"Resistencia: {resistencia:.8f}"
             direccion_emoji = "⬆️"
@@ -3180,7 +3180,7 @@ class TradingBot:
 {emoji_principal} <b>¡BREAKOUT DETECTADO! - {simbolo}</b>
 ⚠️ <b>{tipo_texto}</b> {direccion_emoji}
 ⏰ <b>Hora:</b> {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
-🔴 <b>ESPERANDO REINGRESO...</b>
+⏳ <b>ESPERANDO REINGRESO...</b>
 👁️ Máximo 30 minutos para confirmación
 📍 {expectativa}
         """
@@ -3331,10 +3331,10 @@ class TradingBot:
             breakout_line = [precio_breakout] * len(df)
             if tipo_breakout == "BREAKOUT_LONG":
                 color_breakout = "#D68F01"
-                
+                titulo_extra = "RUPTURA ALCISTA"
             else:
                 color_breakout = '#D68F01'
-                titulo_extra = " RUPTURA BAJISTA"
+                titulo_extra = "RUPTURA BAJISTA"
             apds.append(mpf.make_addplot(breakout_line, color=color_breakout, linestyle='-', width=3, panel=0, alpha=0.8))
             # Stochastic
             apds.append(mpf.make_addplot(df['Stoch_K'], color='#00BFFF', width=1.5, panel=1, ylabel='Stochastic'))
@@ -3356,7 +3356,7 @@ class TradingBot:
             
             # Crear gráfico
             fig, axes = mpf.plot(df, type='candle', style='nightclouds',
-                               title=f'{simbolo} | {titulo_extra} | {config_optima["timeframe"]} |  ESPERANDO REENTRY',
+                               title=f'{simbolo} | {titulo_extra} | {config_optima["timeframe"]} | [ESPERANDO REENTRY]',
                                ylabel='Precio',
                                addplot=apds,
                                volume=False,
@@ -3408,11 +3408,11 @@ class TradingBot:
         # CORREGIR LÓGICA DE DETECCIÓN DE BREAKOUT
         if direccion == "ALCISTA" and nivel_fuerza >= 2:
             if precio_cierre < soporte:  # Precio rompió hacia abajo el soporte
-                print(f"       {simbolo} - BREAKOUT LONG: {precio_cierre:.8f} < Soporte: {soporte:.8f}")
+                print(f"     🚀 {simbolo} - BREAKOUT LONG: {precio_cierre:.8f} < Soporte: {soporte:.8f}")
                 return "BREAKOUT_LONG"
         elif direccion == "BAJISTA" and nivel_fuerza >= 2:
             if precio_cierre > resistencia:  # Precio rompió hacia arriba la resistencia
-                print(f"      {simbolo} - BREAKOUT SHORT: {precio_cierre:.8f} > Resistencia: {resistencia:.8f}")
+                print(f"     📉 {simbolo} - BREAKOUT SHORT: {precio_cierre:.8f} > Resistencia: {resistencia:.8f}")
                 return "BREAKOUT_SHORT"
         return None
 
@@ -3620,7 +3620,7 @@ class TradingBot:
         
                 estado_stoch = ""
                 if info_canal['stoch_k'] <= 30:
-                    estado_stoch = "🔴 OVERSOLD"
+                    estado_stoch = "📉 OVERSOLD"
                 elif info_canal['stoch_k'] >= 70:
                     estado_stoch = "📈 OVERBOUGHT"
                 else:
@@ -3674,7 +3674,7 @@ class TradingBot:
                 # Solo bloquear si hay una operación activa para este símbolo
                 # NO bloquear solo por breakout_history (eso bloqueaba reentries válidos)
                 if simbolo in self.operaciones_activas:
-                    print(f"   🔴 {simbolo} - Operación activa existente, omitiendo...")
+                    print(f"   ⏳ {simbolo} - Operación activa existente, omitiendo...")
                     continue
                 
                 breakout_info = self.esperando_reentry[simbolo]
@@ -3690,7 +3690,7 @@ class TradingBot:
                 print(f"⚠️ Error analizando {simbolo}: {e}")
                 continue
         if self.esperando_reentry:
-            print(f"\n🔴 Esperando reingreso en {len(self.esperando_reentry)} símbolos:")
+            print(f"\n⏳ Esperando reingreso en {len(self.esperando_reentry)} símbolos:")
             for simbolo, info in self.esperando_reentry.items():
                 tiempo_espera = (datetime.now() - info['timestamp']).total_seconds() / 60
                 print(f"   • {simbolo} - {info['tipo']} - Esperando {tiempo_espera:.1f} min")
@@ -3718,7 +3718,7 @@ class TradingBot:
                 print(f"    🚫 {simbolo} - Operación automática activa, omitiendo señal")
             return
         if simbolo in self.senales_enviadas:
-            print(f"    🔴 {simbolo} - Señal ya procesada anteriormente, omitiendo...")
+            print(f"    ⏳ {simbolo} - Señal ya procesada anteriormente, omitiendo...")
             return
         if precio_entrada is None or tp is None or sl is None:
             print(f"    ❌ Niveles inválidos para {simbolo}, omitiendo señal")
@@ -3728,12 +3728,12 @@ class TradingBot:
         ratio_rr = beneficio / riesgo if riesgo > 0 else 0
         sl_percent = abs((sl - precio_entrada) / precio_entrada) * 100
         tp_percent = abs((tp - precio_entrada) / precio_entrada) * 100
-        stoch_estado = "🔴 SOBREVENTA" if tipo_operacion == "LONG" else "📈 SOBRECOMPRA"
+        stoch_estado = "📉 SOBREVENTA" if tipo_operacion == "LONG" else "📈 SOBRECOMPRA"
         breakout_texto = ""
         if breakout_info:
             tiempo_breakout = (datetime.now() - breakout_info['timestamp']).total_seconds() / 60
             breakout_texto = f"""
-💰 <b>BREAKOUT + REENTRY DETECTADO:</b>
+🚀 <b>BREAKOUT + REENTRY DETECTADO:</b>
 ⏰ Tiempo desde breakout: {tiempo_breakout:.1f} minutos
 💰 Precio breakout: {breakout_info['precio_breakout']:.8f}
 """
@@ -3999,13 +3999,13 @@ class TradingBot:
         return operaciones_cerradas
 
     def generar_mensaje_cierre(self, datos_operacion):
-        emoji = "🟢" if datos_operacion['resultado'] == "TP" else "🔴"
+        emoji = "OK" if datos_operacion['resultado'] == "TP" else "SL"
         color_emoji = "✅" if datos_operacion['resultado'] == "TP" else "❌"
         if datos_operacion['tipo'] == 'LONG':
             pnl_absoluto = datos_operacion['precio_salida'] - datos_operacion['precio_entrada']
         else:
             pnl_absoluto = datos_operacion['precio_entrada'] - datos_operacion['precio_salida']
-        breakout_usado = "💰 Sí" if datos_operacion.get('breakout_usado', False) else "❌ No"
+        breakout_usado = "🚀 Sí" if datos_operacion.get('breakout_usado', False) else "❌ No"
         operacion_ejecutada = "🤖 Sí" if datos_operacion.get('operacion_ejecutada', False) else "❌ No"
         mensaje = f"""
 {emoji} <b>OPERACIÓN CERRADA - {datos_operacion['symbol']}</b>
@@ -4016,7 +4016,7 @@ class TradingBot:
 💵 PnL Absoluto: {pnl_absoluto:.8f}
 📈 PnL %: {datos_operacion['pnl_percent']:.2f}%
 ⏰ Duración: {datos_operacion['duracion_minutos']:.1f} minutos
-💰 Breakout+Reentry: {breakout_usado}
+🚀 Breakout+Reentry: {breakout_usado}
 🤖 Operación BITGET FUTUROS: {operacion_ejecutada}
 📏 Ángulo: {datos_operacion['angulo_tendencia']:.1f}°
 📊 Pearson: {datos_operacion['pearson']:.3f}
@@ -4109,11 +4109,11 @@ class TradingBot:
 
     def determinar_direccion_tendencia(self, angulo_grados, umbral_minimo=1):
         if abs(angulo_grados) < umbral_minimo:
-            return " RANGO"
+            return "RANGO"
         elif angulo_grados > 0:
-            return " ALCISTA"
+            return "ALCISTA"
         else:
-            return " BAJISTA"
+            return "BAJISTA"
 
     def calcular_r2(self, y_real, x, pendiente, intercepto):
         if len(y_real) != len(x):
@@ -4414,11 +4414,11 @@ class TradingBot:
             print(f"   🤖 BITGET FUTUROS: ❌ No configurado")
         if self.operaciones_activas:
             for simbolo, op in self.operaciones_activas.items():
-                estado = "🟢 LONG" if op['tipo'] == 'LONG' else "🔴 SHORT"
+                estado = "LONG" if op['tipo'] == 'LONG' else "SHORT"
                 ancho_canal = op.get('ancho_canal_porcentual', 0)
                 timeframe = op.get('timeframe_utilizado', 'N/A')
                 velas = op.get('velas_utilizadas', 0)
-                breakout = "💰" if op.get('breakout_usado', False) else ""
+                breakout = "🚀" if op.get('breakout_usado', False) else ""
                 ejecutada = "🤖" if op.get('operacion_ejecutada', False) else ""
                 # Marcar operaciones manuales
                 manual = "👤" if op.get('operacion_manual_usuario', False) else ""
@@ -4427,7 +4427,6 @@ class TradingBot:
     def iniciar(self):
         print("\n" + "=" * 70)
         print("🤖 BOT DE TRADING - ESTRATEGIA BREAKOUT + REENTRY")
-        print("🎯 PRIORIDAD: TIMEFRAMES CORTOS (1m > 3m > 5m > 15m > 30m)")
         print("💾 PERSISTENCIA: ACTIVADA")
         print("🔄 REEVALUACIÓN: CADA 2 HORAS")
         print("🏦 INTEGRACIÓN: BITGET FUTUROS API (Dinero REAL)")
@@ -4436,11 +4435,11 @@ class TradingBot:
         print(f"⏰ Timeframes: {', '.join(self.config.get('timeframes', []))}")
         print(f"🕯️ Velas: {self.config.get('velas_options', [])}")
         print(f"📏 ANCHO MÍNIMO: {self.config.get('min_channel_width_percent', 4)}%")
-        print(f"💰 Estrategia: 1) Detectar Breakout → 2) Esperar Reentry → 3) Confirmar con Stoch")
+        print(f"🚀 Estrategia: 1) Detectar Breakout → 2) Esperar Reentry → 3) Confirmar con Stoch")
         if self.config.get('simbolos_dinamicos', False):
-            print(f"📊 Modo: 🟢 MONEDAS DINÁMICAS (Top 100 por volumen)")
+            print(f"📊 Modo: 🟢 MONEDAS DINÁMICAS (Top 200 por volumen)")
         else:
-            print(f"📊 Modo: 🔴 SÍMBOLOS FIJOS")
+            print(f"📊 Modo: FIJOS")
         if self.bitget_client:
             print(f"🤖 BITGET FUTUROS: ✅ API Conectada")
             print(f"⚡ Apalancamiento: {self.leverage_por_defecto}x")
@@ -4461,7 +4460,7 @@ class TradingBot:
         else:
             print(f"🤖 BITGET FUTUROS: ❌ No configurado (solo señales)")
         print("=" * 70)
-        print("\n💰 INICIANDO BOT...")
+        print("\n🚀 INICIANDO BOT...")
 
         # ACTUALIZACIÓN INICIAL DE MONEDAS DINÁMICAS
         print("\n📊 INICIALIZANDO MONEDAS DINÁMICAS POR VOLUMEN...")
@@ -4488,7 +4487,7 @@ class TradingBot:
                 self.mostrar_resumen_operaciones()
                 minutos_espera = self.config.get('scan_interval_minutes', 1)
                 print(f"\n✅ Análisis completado. Señales nuevas: {nuevas_senales}")
-                print(f"🔴 Próximo análisis en {minutos_espera} minutos...")
+                print(f"⏳ Próximo análisis en {minutos_espera} minutos...")
                 print("-" * 60)
                 for minuto in range(minutos_espera):
                     time.sleep(60)
@@ -4542,7 +4541,7 @@ def crear_config_desde_entorno():
         'bitget_passphrase': os.environ.get('BITGET_PASSPHRASE'),
         'webhook_url': os.environ.get('WEBHOOK_URL'),
         'ejecutar_operaciones_automaticas': os.environ.get('EJECUTAR_OPERACIONES_AUTOMATICAS', 'false').lower() == 'true',
-        'leverage_por_defecto': min(int(os.environ.get('LEVERAGE_POR_DEFECTO', '10')), 10)
+        'leverage_por_defecto': min(int(os.environ.get('LEVERAGE_POR_DEFECTO', '20')), 20)
     }
 
 # ---------------------------
@@ -4632,7 +4631,7 @@ def setup_telegram_webhook():
         logger.error(f"❌ Error configurando webhook: {e}")
 
 if __name__ == '__main__':
-    logger.info("💰 Iniciando aplicación Flask...")
+    logger.info("🚀 Iniciando aplicación Flask...")
     setup_telegram_webhook()
     port = int(os.environ.get('PORT', 5000))
     app.run(debug=False, host='0.0.0.0', port=port)
