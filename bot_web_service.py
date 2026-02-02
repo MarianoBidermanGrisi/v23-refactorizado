@@ -3406,11 +3406,11 @@ class TradingBot:
                 print(f"     ⏰ {simbolo} - Breakout detectado recientemente ({tiempo_desde_ultimo:.1f} min), omitiendo...")
                 return None
         # CORREGIR LÓGICA DE DETECCIÓN DE BREAKOUT
-        if direccion == "🟢 ALCISTA" and nivel_fuerza >= 2:
+        if direccion == "ALCISTA" and nivel_fuerza >= 2:
             if precio_cierre < soporte:  # Precio rompió hacia abajo el soporte
                 print(f"       {simbolo} - BREAKOUT LONG: {precio_cierre:.8f} < Soporte: {soporte:.8f}")
                 return "BREAKOUT_LONG"
-        elif direccion == "🔴 BAJISTA" and nivel_fuerza >= 2:
+        elif direccion == "BAJISTA" and nivel_fuerza >= 2:
             if precio_cierre > resistencia:  # Precio rompió hacia arriba la resistencia
                 print(f"     🔴 {simbolo} - BREAKOUT SHORT: {precio_cierre:.8f} > Resistencia: {resistencia:.8f}")
                 return "BREAKOUT_SHORT"
@@ -4109,11 +4109,11 @@ class TradingBot:
 
     def determinar_direccion_tendencia(self, angulo_grados, umbral_minimo=1):
         if abs(angulo_grados) < umbral_minimo:
-            return "⚪ RANGO"
+            return " RANGO"
         elif angulo_grados > 0:
-            return "🟢 ALCISTA"
+            return " ALCISTA"
         else:
-            return "🔴 BAJISTA"
+            return " BAJISTA"
 
     def calcular_r2(self, y_real, x, pendiente, intercepto):
         if len(y_real) != len(x):
