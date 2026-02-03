@@ -563,29 +563,29 @@ class BitgetClient:
             product_type: Tipo de producto ('USDT-FUTURES' o 'USDT-MIX')
         
         Returns:
-            int: Apalancamiento máximo permitido, o 20 por defecto si hay error
+            int: Apalancamiento máximo permitido, o 10 por defecto si hay error
         """
         try:
             # Primero obtener la info del símbolo
             symbol_info = self.get_symbol_info(symbol)
             if not symbol_info:
-                logger.warning(f"No se pudo obtener info de {symbol}, usando leverage 20x por defecto")
-                return 20
+                logger.warning(f"No se pudo obtener info de {symbol}, usando leverage 10x por defecto")
+                return 10
             
             # Obtener el leverage máximo del exchange
             # La API de Bitget devuelve 'openMaxLeverage' en la info del contrato
-            max_leverage = symbol_info.get('openMaxLeverage', 20)
+            max_leverage = symbol_info.get('openMaxLeverage', 10)
             
             # Asegurar que sea un valor válido
             if not max_leverage or max_leverage < 1:
-                max_leverage = 20
+                max_leverage = 10
             
             logger.info(f"📊 {symbol}: Apalancamiento máximo permitido = {max_leverage}x")
             return int(max_leverage)
             
         except Exception as e:
             logger.error(f"Error obteniendo leverage máximo para {symbol}: {e}")
-            return 20  # Fallback seguro
+            return 10  # Fallback seguro
 
     def place_tpsl_order(self, symbol, hold_side, trigger_price, order_type='stop_loss', stop_loss_price=None, take_profit_price=None, trade_direction=None):
         """
@@ -1882,7 +1882,7 @@ class TradingBot:
         # Configuración de operaciones automáticas
         self.ejecutar_operaciones_automaticas = config.get('ejecutar_operaciones_automaticas', False)
         self.capital_por_operacion = config.get('capital_por_operacion', None)  # 3% del saldo (dinámico)
-        self.leverage_por_defecto = config.get('leverage_por_defecto', 20)  # 20x apalancamiento
+        self.leverage_por_defecto = config.get('leverage_por_defecto', 10)  # 10x apalancamiento
         
         parametros_optimizados = None
         if self.auto_optimize:
@@ -2951,10 +2951,10 @@ class TradingBot:
                 print(f"   🔄 Reevaluando configuración para {simbolo} (pasó 2 horas)")
         print(f"   🔍 Buscando configuración óptima para {simbolo}...")
         timeframes = self.config.get('timeframes', ['15m', '30m', '1h', '4h'])
-        velas_options = self.config.get('velas_options', [80, 100, 120, 1, 200])
+        velas_options = self.config.get('velas_options', [80, 100, 120, 150, 200])
         mejor_config = None
         mejor_puntaje = -999999
-        prioridad_timeframe = {'15m': 200, '15m': 1, '15m': 120, '15m': 100, '30m': 80}
+        prioridad_timeframe = {'15m': 200, '15m': 150, '15m': 120, '15m': 100, '30m': 80}
         for timeframe in timeframes:
             for num_velas in velas_options:
                 try:
@@ -4541,7 +4541,7 @@ def crear_config_desde_entorno():
         'bitget_passphrase': os.environ.get('BITGET_PASSPHRASE'),
         'webhook_url': os.environ.get('WEBHOOK_URL'),
         'ejecutar_operaciones_automaticas': os.environ.get('EJECUTAR_OPERACIONES_AUTOMATICAS', 'false').lower() == 'true',
-        'leverage_por_defecto': min(int(os.environ.get('LEVERAGE_POR_DEFECTO', '20')), 20)
+        'leverage_por_defecto': min(int(os.environ.get('LEVERAGE_POR_DEFECTO', '10')), 10)
     }
 
 # ---------------------------
