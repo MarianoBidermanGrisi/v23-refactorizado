@@ -4058,9 +4058,9 @@ class TradingBot:
            del self.breakouts_detectados[simbolo]
     
         if eliminados > 0:
-        print(f"   🗑️ Total de breakout expirados eliminados: {eliminados}")
-        # Guardar estado después de la limpieza
-        self.guardar_estado()
+           print(f"   🗑️ Total de breakout expirados eliminados: {eliminados}")
+           # Guardar estado después de la limpieza
+           self.guardar_estado()
     
            return eliminados
     
