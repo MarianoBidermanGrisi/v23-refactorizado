@@ -4580,6 +4580,8 @@ def crear_config_desde_entorno():
         # Símbolos vacíos - Se generarán dinámicamente en actualizar_moned()
         'symbols': [],
         'simbolos_dinamicos': True,  # Flag para indicar modo dinámico
+         # NUEVO: Tiempo máximo de espera para breakout
+        'max_wait_minutes': int(os.environ.get('MAX_WAIT_MINUTES', '120')),
         'telegram_token': os.environ.get('TELEGRAM_TOKEN'),
         'telegram_chat_ids': telegram_chat_ids,
         'auto_optimize': True,
