@@ -2960,7 +2960,7 @@ class TradingBot:
         velas_options = self.config.get('velas_options', [80, 100, 120, 150, 200])
         mejor_config = None
         mejor_puntaje = -999999
-        prioridad_timeframe = {'15m': 200, '15m': 150, '15m': 120, '15m': 100, '30m': 80}
+        prioridad_timeframe = {'15m': 4, '30m': 3, '1h': 2, '4h': 1}
         for timeframe in timeframes:
             for num_velas in velas_options:
                 try:
@@ -2976,7 +2976,7 @@ class TradingBot:
                         ancho_actual = canal_info['ancho_canal_porcentual']
                         if ancho_actual >= self.config.get('min_channel_width_percent', 4.0):
                             puntaje_ancho = ancho_actual * 10
-                            puntaje_timeframe = prioridad_timeframe.get(timeframe, ) * 100
+                            puntaje_timeframe = prioridad_timeframe.get(timeframe,0) * 100
                             puntaje_total = puntaje_timeframe + puntaje_ancho
                             if puntaje_total > mejor_puntaje:
                                 mejor_puntaje = puntaje_total
@@ -2988,6 +2988,7 @@ class TradingBot:
                                 }
                 except Exception:
                     continue
+        # Segundo bucle sin filtro de ancho de canal
         if not mejor_config:
             for timeframe in timeframes:
                 for num_velas in velas_options:
@@ -3003,7 +3004,7 @@ class TradingBot:
                             canal_info['r2_score'] >= 0.4):
                             ancho_actual = canal_info['ancho_canal_porcentual']
                             puntaje_ancho = ancho_actual * 10
-                            puntaje_timeframe = prioridad_timeframe.get(timeframe, ) * 100
+                            puntaje_timeframe = prioridad_timeframe.get(timeframe, 0) * 100
                             puntaje_total = puntaje_timeframe + puntaje_ancho
                             if puntaje_total > mejor_puntaje:
                                 mejor_puntaje = puntaje_total
