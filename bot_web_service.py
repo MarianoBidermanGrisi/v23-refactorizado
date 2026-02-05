@@ -1420,14 +1420,19 @@ class BitgetClient:
             logger.error(f"Error obteniendo saldo de cuenta: {e}")
             return None
 
-    def get_klines(self, symbol, interval='5m', limit=200):
+    def get_klines(self, symbol, interval='15m', limit=200):
         """Obtener velas (datos de mercado) de BITGET FUTUROS"""
         try:
             interval_map = {
                 '15m': '15m', '30m': '30m', '1h': '1H',
                 '4h': '4H'
             }
-            bitget_interval = interval_map.get(interval, '5m')
+            bitget_interval = interval_map.get(interval)
+            if bitget_interval is None:
+                logger.error(f"Intervalo '{interval}' no soportado. Timeframes válidos: {list(interval_map.keys())}")
+                return None
+
+            
             request_path = f'/api/v2/mix/market/candles'
             params = {
                 'symbol': symbol,
@@ -1448,6 +1453,7 @@ class BitgetClient:
                     candles = data.get('data', [])
                     return candles
                 else:
+                    # Retry con USDT-MIX como fallback
                     params['productType'] = 'USDT-MIX'
                     response = requests.get(
                         self.base_url + request_path,
