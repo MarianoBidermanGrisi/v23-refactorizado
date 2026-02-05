@@ -4407,6 +4407,11 @@ class TradingBot:
     def ejecutar_analisis(self):
         """Ejecutar análisis completo incluyendo sincronización con Bitget"""
         try:
+            # 0. LIMPIEZA DE BREAKOUT EXPIRADOS - siempre ejecutar primero
+            max_wait = self.config.get('max_wait_minutes', 120)
+            self.limpiar_breakouts_expirados(max_wait)
+            
+            
             # 1. Sincronización con Bitget (cada ciclo)
             if self.bitget_client:
                 self.sincronizar_con_bitget()
