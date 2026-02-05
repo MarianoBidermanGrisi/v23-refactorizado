@@ -4045,9 +4045,9 @@ class TradingBot:
     
         for simbolo, info in self.esperando_reentry.items():tiempo_espera = (datetime.now() - info['timestamp']).total_seconds() / 60
             if tiempo_espera > max_wait_minutes:
-            simbolos_a_eliminar.append(simbolo)
-            eliminados += 1
-            print(f"   ⏰ {simbolo} - Expiró tiempo de espera ({tiempo_espera:.1f} min > {max_wait_minutes} min), eliminando...")
+               simbolos_a_eliminar.append(simbolo)
+               eliminados += 1
+               print(f"   ⏰ {simbolo} - Expiró tiempo de espera ({tiempo_espera:.1f} min > {max_wait_minutes} min), eliminando...")
     
         # Eliminar los breakout expirados
         for simbolo in simbolos_a_eliminar:
