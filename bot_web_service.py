@@ -1539,7 +1539,7 @@ def ejecutar_operacion_bitget(bitget_client, simbolo, tipo_operacion, capital_us
         time.sleep(1)  # Esperar un poco más para asegurar que se aplique
         
         # 3. Obtener precio actual
-        klines = bitget_client.get_klines(simbolo, '1m', 1)
+        klines = bitget_client.get_klines(simbolo, '15m', 1)
         if not klines or len(klines) == 0:
             logger.error(f"No se pudo obtener precio de {simbolo} en BITGET FUTUROS")
             return None
@@ -2771,7 +2771,7 @@ class TradingBot:
                             logger.info(f"ℹ️ Órdenes TP/SL para {simbolo}: SL={'OK' if sl_activa else 'FALTA'}, TP={'OK' if tp_activa else 'FALTA'}")
                         
                         # Obtener precio actual
-                        klines = self.bitget_client.get_klines(simbolo, '1m', 1)
+                        klines = self.bitget_client.get_klines(simbolo, '15m', 1)
                         if not klines:
                             continue
                         
@@ -2861,7 +2861,7 @@ class TradingBot:
             
             # Obtener precio de salida si no se proporcionó
             if precio_salida is None and self.bitget_client:
-                klines = self.bitget_client.get_klines(simbolo, '1m', 1)
+                klines = self.bitget_client.get_klines(simbolo, '15m', 1)
                 if klines:
                     klines.reverse()
                     precio_salida = float(klines[0][4])
