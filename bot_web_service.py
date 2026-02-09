@@ -201,7 +201,7 @@ def calcular_adx_di(high, low, close, length=14):
 
 
 def calcular_adx_di_pandas(df, high_col='High', low_col='Low', close_col='Close', length=14):
-     """
+    """
     Versión optimizada usando pandas DataFrame.
     Implementa correctamente Wilder Smoothing para ADX, DI+ y DI-.
     
