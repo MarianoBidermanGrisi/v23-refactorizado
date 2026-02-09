@@ -4191,35 +4191,35 @@ class TradingBot:
         return 1 - (ss_res / ss_tot)
 
     def generar_grafico_profesional(self, simbolo, info_canal, datos_mercado, precio_entrada, tp, sl, tipo_operacion):
-        \"\"\"
+        """
         Genera un gráfico profesional con velas, indicadores y niveles de trading.
         Compatible con la versión corregida de ADX/DI+/DI-.
-        \"\"\"
+        """
         try:
             config_optima = self.config_optima_por_simbolo.get(simbolo)
             if not config_optima:
-                print(f\"⚠️ No se encontró config_optima para {simbolo}\")
+                print(f"⚠️ No se encontró config_optima para {simbolo}")
                 return None
             
             # ═══════════════════════════════════════════════════════════════════
             # OBTENER DATOS DE PRECIO (Manteniendo lógica original de Bitget/Binance)
             # ═══════════════════════════════════════════════════════════════════
             klines = None
-            fuente_datos = \"\"
+            fuente_datos = ""
             
             # Usar API de Bitget FUTUROS si está disponible (lógica original)
             if self.bitget_client:
                 try:
                     klines = self.bitget_client.get_klines(simbolo, config_optima['timeframe'], config_optima['num_velas'])
                     if klines:
-                        fuente_datos = \"Bitget\"
+                        fuente_datos = "Bitget"
                 except Exception as e:
-                    print(f\"⚠️ Error con Bitget: {e}\")
+                    print(f"⚠️ Error con Bitget: {e}")
             
             # Fallback a Binance
             if not klines:
                 try:
-                    url = \"https://api.binance.com/api/v3/klines\"
+                    url = "https://api.binance.com/api/v3/klines"
                     params = {
                         'symbol': simbolo,
                         'interval': config_optima['timeframe'],
@@ -4228,12 +4228,12 @@ class TradingBot:
                     respuesta = requests.get(url, params=params, timeout=10)
                     if respuesta.status_code == 200:
                         klines = respuesta.json()
-                        fuente_datos = \"Binance\"
+                        fuente_datos = "Binance"
                 except Exception as e:
-                    print(f\"⚠️ Error con Binance: {e}\")
+                    print(f"⚠️ Error con Binance: {e}")
             
             if not klines:
-                print(f\"⚠️ No se pudieron obtener datos para {simbolo}\")
+                print(f"⚠️ No se pudieron obtener datos para {simbolo}")
                 return None
             
             # ═══════════════════════════════════════════════════════════════════
@@ -4251,11 +4251,11 @@ class TradingBot:
                         'Volume': float(kline[5])
                     })
                 except (IndexError, ValueError) as e:
-                    print(f\"⚠️ Error procesando kline: {e}\")
+                    print(f"⚠️ Error procesando kline: {e}")
                     continue
             
             if not df_data:
-                print(f\"⚠️ No hay datos válidos para {simbolo}\")
+                print(f"⚠️ No hay datos válidos para {simbolo}")
                 return None
             
             df = pd.DataFrame(df_data)
@@ -4284,7 +4284,7 @@ class TradingBot:
                 df['Resistencia'] = resistencia_values
                 df['Soporte'] = soporte_values
             except Exception as e:
-                print(f\"⚠️ Error calculando canal: {e}\")
+                print(f"⚠️ Error calculando canal: {e}")
                 df['Resistencia'] = df['Close'].max()
                 df['Soporte'] = df['Close'].min()
             
@@ -4338,7 +4338,7 @@ class TradingBot:
                 df['Stoch_K'] = k_smoothed
                 df['Stoch_D'] = stoch_d_values
             except Exception as e:
-                print(f\"⚠️ Error calculando Stochastic: {e}\")
+                print(f"⚠️ Error calculando Stochastic: {e}")
                 df['Stoch_K'] = 50
                 df['Stoch_D'] = 50
             
@@ -4359,7 +4359,7 @@ class TradingBot:
                 df['DI-'] = pd.Series(adx_results['di_minus']).fillna(method='ffill').fillna(method='bfill').values
                 
             except Exception as e:
-                print(f\"⚠️ Error calculando ADX/DI: {e}\")
+                print(f"⚠️ Error calculando ADX/DI: {e}")
                 # Valores por defecto si falla
                 df['ADX'] = 20
                 df['DI+'] = 20
@@ -4371,7 +4371,7 @@ class TradingBot:
             try:
                 apds = [
                     mpf.make_addplot(df['Resistencia'], color='#5444ff', linestyle='--', width=2, panel=0),
-                    mpf.make_addplot(df['Soporte'], color=\"#5444ff\", linestyle='--', width=2, panel=0),
+                    mpf.make_addplot(df['Soporte'], color="#5444ff", linestyle='--', width=2, panel=0),
                 ]
                 
                 # Añadir líneas de entrada, TP y SL
@@ -4388,19 +4388,19 @@ class TradingBot:
                 apds.append(mpf.make_addplot(df['Stoch_D'], color='#FF6347', width=1.5, panel=1))
                 overbought = [80] * len(df)
                 oversold = [20] * len(df)
-                apds.append(mpf.make_addplot(overbought, color=\"#E7E4E4\", linestyle='--', width=0.8, panel=1, alpha=0.5))
-                apds.append(mpf.make_addplot(oversold, color=\"#E9E4E4\", linestyle='--', width=0.8, panel=1, alpha=0.5))
+                apds.append(mpf.make_addplot(overbought, color="#E7E4E4", linestyle='--', width=0.8, panel=1, alpha=0.5))
+                apds.append(mpf.make_addplot(oversold, color="#E9E4E4", linestyle='--', width=0.8, panel=1, alpha=0.5))
                 
                 # Panel ADX/DI (panel 2)
                 apds.append(mpf.make_addplot(df['DI+'], color='#00FF00', width=1.5, panel=2, ylabel='ADX/DI'))
                 apds.append(mpf.make_addplot(df['DI-'], color='#FF0000', width=1.5, panel=2))
                 apds.append(mpf.make_addplot(df['ADX'], color='#000080', width=2, panel=2))
                 adx_threshold = [20] * len(df)
-                apds.append(mpf.make_addplot(adx_threshold, color=\"#808080\", linestyle='--', width=0.8, panel=2, alpha=0.5))
+                apds.append(mpf.make_addplot(adx_threshold, color="#808080", linestyle='--', width=0.8, panel=2, alpha=0.5))
                 
                 # Generar figura
                 fig, axes = mpf.plot(df, type='candle', style='nightclouds',
-                                   title=f'{simbolo} | {tipo_operacion} | {config_optima[\"timeframe\"]} | {fuente_datos}',
+                                   title=f'{simbolo} | {tipo_operacion} | {config_optima["timeframe"]} | {fuente_datos}',
                                    ylabel='Precio',
                                    addplot=apds,
                                    volume=False,
@@ -4431,17 +4431,17 @@ class TradingBot:
                 buf.seek(0)
                 plt.close(fig)
                 
-                print(f\"✅ Gráfico generado para {simbolo} desde {fuente_datos}\")
+                print(f"✅ Gráfico generado para {simbolo} desde {fuente_datos}")
                 return buf
                 
             except Exception as e:
-                print(f\"⚠️ Error en mpf.plot: {e}\")
+                print(f"⚠️ Error en mpf.plot: {e}")
                 import traceback
                 traceback.print_exc()
                 return None
         
         except Exception as e:
-            print(f\"⚠️ Error general generando gráfico para {simbolo}: {e}\")
+            print(f"⚠️ Error general generando gráfico para {simbolo}: {e}")
             import traceback
             traceback.print_exc()
             return None
