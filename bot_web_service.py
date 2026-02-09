@@ -122,27 +122,28 @@ def calcular_adx_di(high, low, close, length=14):
     # SmoothedTrueRange usando la fórmula de Pine Script
     for i in range(1, n):
         if i == 1:
-            # Primera iteración: inicializar con el primer valor
-            smoothed_true_range[i] = true_range[i]
-            smoothed_dm_plus[i] = directional_movement_plus[i]
-            smoothed_dm_minus[i] = directional_movement_minus[i]
+            # Primera iteración: usar promedio de los primeros dos valores para evitar sesgo
+            smoothed_true_range[i] = (true_range[i-1] + true_range[i]) / 2
+            smoothed_dm_plus[i] = (directional_movement_plus[i-1] + directional_movement_plus[i]) / 2
+            smoothed_dm_minus[i] = (directional_movement_minus[i-1] + directional_movement_minus[i]) / 2
         else:
-            # Aplicar el suavizado recursivo de Pine Script
-            smoothed_true_range[i] = (
-                smoothed_true_range[i-1] - 
-                smoothed_true_range[i-1] / length + 
-                true_range[i]
-            )
-            smoothed_dm_plus[i] = (
-                smoothed_dm_plus[i-1] - 
-                smoothed_dm_plus[i-1] / length + 
-                directional_movement_plus[i]
-            )
-            smoothed_dm_minus[i] = (
-                smoothed_dm_minus[i-1] - 
-                smoothed_dm_minus[i-1] / length + 
-                directional_movement_minus[i]
-            )
+            # Aplicar el suavizado recursivo de Wilder correctamente
+            # smoothed[i] = smoothed[i-1] + (value[i] - smoothed[i-1]) / length
+            if np.isnan(true_range[i]):
+                smoothed_true_range[i] = smoothed_true_range[i-1]
+            else:
+                smoothed_true_range[i] = smoothed_true_range[i-1] + (true_range[i] - smoothed_true_range[i-1]) / length
+            
+            if np.isnan(directional_movement_plus[i]):
+                smoothed_dm_plus[i] = smoothed_dm_plus[i-1]
+            else:
+                smoothed_dm_plus[i] = smoothed_dm_plus[i-1] + (directional_movement_plus[i] - smoothed_dm_plus[i-1]) / length
+            
+            if np.isnan(directional_movement_minus[i]):
+                smoothed_dm_minus[i] = smoothed_dm_minus[i-1]
+            else:
+                smoothed_dm_minus[i] = smoothed_dm_minus[i-1] + (directional_movement_minus[i] - smoothed_dm_minus[i-1]) / length
+        
     
     # Evitar división por cero
     safe_tr = np.where(smoothed_true_range == 0, np.nan, smoothed_true_range)
@@ -172,11 +173,25 @@ def calcular_adx_di(high, low, close, length=14):
     )
     
     # ADX = sma(DX, length) - Media móvil simple de DX
+    dx_wilder = np.zeros(n)
     for i in range(n):
-        if i < length - 1:
+        if i == 0:
+            dx_wilder[i] = dx[i]
+        else:
+            if np.isnan(dx[i]):
+                dx_wilder[i] = dx_wilder[i-1]
+            else:
+                dx_wilder[i] = dx_wilder[i-1] + (dx[i] - dx_wilder[i-1]) / length
+
+    for i in range(n):
+        if i < 2 * length - 1:
             adx[i] = np.nan
         else:
-            adx[i] = np.mean(dx[i-length+1:i+1])
+            if np.isnan(dx_wilder[i]):
+                adx[i] = adx[i-1]
+            else:
+                # ADX también usa Wilder Smoothing
+                adx[i] = adx[i-1] + (dx_wilder[i] - adx[i-1]) / length
     
     return {
         'di_plus': di_plus,
