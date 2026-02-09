@@ -37,19 +37,14 @@ logger = logging.getLogger(__name__)
 def calcular_adx_di(high, low, close, length=14):
     """
     Calcula el ADX (Average Directional Index) y los indicadores DI+, DI-.
-    
-    Implementación idéntica a la versión de Pine Script en TradingView.
+    Implementación correcta con Wilder Smoothing (igual que TradingView).
     
     Parámetros:
     -----------
-    high : array-like
-        Array de precios máximos
-    low : array-like
-        Array de precios mínimos
-    close : array-like
-        Array de precios de cierre
-    length : int, opcional
-        Período para el cálculo (por defecto 14)
+    high : array-like - Array de precios máximos
+    low : array-like - Array de precios mínimos
+    close : array-like - Array de precios de cierre
+    length : int - Período para el cálculo (por defecto 14)
     
     Retorna:
     --------
@@ -72,8 +67,8 @@ def calcular_adx_di(high, low, close, length=14):
         low = np.array(low, dtype=np.float64)
         close = np.array(close, dtype=np.float64)
     except Exception as e:
-        # Si hay error en la conversión, retornar arrays vacíos
-        n = 100  # Valor por defecto
+        print(f"⚠️ Error convirtiendo arrays: {e}")
+        n = 100
         return {
             'di_plus': np.full(n, np.nan),
             'di_minus': np.full(n, np.nan),
@@ -81,6 +76,13 @@ def calcular_adx_di(high, low, close, length=14):
         }
     
     n = len(high)
+    if n < 2:
+        print(f"⚠️ Datos insuficientes: {n} velas")
+        return {
+            'di_plus': np.full(n, np.nan) if n > 0 else np.full(2, np.nan),
+            'di_minus': np.full(n, np.nan) if n > 0 else np.full(2, np.nan),
+            'adx': np.full(n, np.nan) if n > 0 else np.full(2, np.nan)
+        }
     
     # Inicializar arrays de resultados
     true_range = np.zeros(n)
@@ -89,22 +91,23 @@ def calcular_adx_di(high, low, close, length=14):
     smoothed_true_range = np.zeros(n)
     smoothed_dm_plus = np.zeros(n)
     smoothed_dm_minus = np.zeros(n)
-    di_plus = np.zeros(n)
-    di_minus = np.zeros(n)
-    dx = np.zeros(n)
-    adx = np.zeros(n)
+    dx_smoothed = np.zeros(n)
+    adx = np.full(n, np.nan)
     
+    # Primera vela: inicializar true_range y DM
+    true_range[0] = high[0] - low[0]
+    directional_movement_plus[0] = 0
+    directional_movement_minus[0] = 0
     
     # Calcular True Range y Directional Movement
     for i in range(1, n):
         # TrueRange = max(high-low, |high-close[1]|, |low-close[1]|)
-        true_range[i] = max(
-            high[i] - low[i],
-            abs(high[i] - close[i-1]),
-            abs(low[i] - close[i-1])
-        )
+        tr1 = high[i] - low[i]
+        tr2 = abs(high[i] - close[i-1])
+        tr3 = abs(low[i] - close[i-1])
+        true_range[i] = max(tr1, tr2, tr3)
         
-        # DirectionalMovementPlus = high-nz(high[1]) > nz(low[1])-low ? max(high-nz(high[1]), 0): 0
+        # Directional Movement
         up_move = high[i] - high[i-1]
         down_move = low[i-1] - low[i]
         
@@ -113,70 +116,62 @@ def calcular_adx_di(high, low, close, length=14):
         else:
             directional_movement_plus[i] = 0
         
-        # DirectionalMovementMinus = nz(low[1])-low > high-nz(high[1]) ? max(nz(low[1])-low, 0): 0
         if down_move > up_move and down_move > 0:
             directional_movement_minus[i] = down_move
         else:
             directional_movement_minus[i] = 0
     
-    # SmoothedTrueRange usando la fórmula de Pine Script
+    # Inicializar smoothed values con el primer valor de true_range
+    smoothed_true_range[0] = true_range[0]
+    smoothed_dm_plus[0] = directional_movement_plus[0]
+    smoothed_dm_minus[0] = directional_movement_minus[0]
+    
+    # SmoothedTrueRange usando Wilder Smoothing (igual que TradingView)
     for i in range(1, n):
-        if i == 1:
-            # Primera iteración: inicializar con el primer valor
-            smoothed_true_range[i] = true_range[i]
-            smoothed_dm_plus[i] = directional_movement_plus[i]
-            smoothed_dm_minus[i] = directional_movement_minus[i]
-        else:
-            # Aplicar el suavizado recursivo de Pine Script
-            smoothed_true_range[i] = (
-                smoothed_true_range[i-1] - 
-                smoothed_true_range[i-1] / length + 
-                true_range[i]
-            )
-            smoothed_dm_plus[i] = (
-                smoothed_dm_plus[i-1] - 
-                smoothed_dm_plus[i-1] / length + 
-                directional_movement_plus[i]
-            )
-            smoothed_dm_minus[i] = (
-                smoothed_dm_minus[i-1] - 
-                smoothed_dm_minus[i-1] / length + 
-                directional_movement_minus[i]
-            )
+        # Wilder Smoothing: smoothed[i] = smoothed[i-1] + (value[i] - smoothed[i-1]) / length
+        smoothed_true_range[i] = smoothed_true_range[i-1] + (true_range[i] - smoothed_true_range[i-1]) / length
+        smoothed_dm_plus[i] = smoothed_dm_plus[i-1] + (directional_movement_plus[i] - smoothed_dm_plus[i-1]) / length
+        smoothed_dm_minus[i] = smoothed_dm_minus[i-1] + (directional_movement_minus[i] - smoothed_dm_minus[i-1]) / length
     
-    # Evitar división por cero
-    safe_tr = np.where(smoothed_true_range == 0, np.nan, smoothed_true_range)
+    # Calcular DI+ y DI-
+    di_plus = np.full(n, np.nan)
+    di_minus = np.full(n, np.nan)
     
-    # DIPlus = SmoothedDirectionalMovementPlus / SmoothedTrueRange * 100
-    di_plus = np.where(
-        np.isnan(safe_tr),
-        np.nan,
-        (smoothed_dm_plus / np.where(smoothed_true_range == 0, np.nan, smoothed_true_range)) * 100
-    )
-    
-    # DIMinus = SmoothedDirectionalMovementMinus / SmoothedTrueRange * 100
-    di_minus = np.where(
-        np.isnan(safe_tr),
-        np.nan,
-        (smoothed_dm_minus / np.where(smoothed_true_range == 0, np.nan, smoothed_true_range)) * 100
-    )
-    
-    # DX = abs(DIPlus-DIMinus) / (DIPlus+DIMinus)*100
-    di_sum = np.nan_to_num(di_plus) + np.nan_to_num(di_minus)
-    di_diff = np.abs(np.nan_to_num(di_plus) - np.nan_to_num(di_minus))
-    
-    dx = np.where(
-        di_sum == 0,
-        0,
-        (di_diff / np.where(di_sum == 0, np.nan, di_sum)) * 100
-    )
-    
-    # ADX = sma(DX, length) - Media móvil simple de DX
     for i in range(n):
-        if i < length - 1:
+        if smoothed_true_range[i] > 0:
+            di_plus[i] = (smoothed_dm_plus[i] / smoothed_true_range[i]) * 100
+            di_minus[i] = (smoothed_dm_minus[i] / smoothed_true_range[i]) * 100
+    
+    # Calcular DX
+    dx = np.zeros(n)
+    for i in range(n):
+        di_sum = di_plus[i] + di_minus[i] if not (np.isnan(di_plus[i]) or np.isnan(di_minus[i])) else 0
+        di_diff = abs(di_plus[i] - di_minus[i]) if not (np.isnan(di_plus[i]) or np.isnan(di_minus[i])) else 0
+        if di_sum > 0:
+            dx[i] = (di_diff / di_sum) * 100
+    
+    # Aplicar Wilder Smoothing al DX
+    for i in range(n):
+        if i == 0:
+            dx_smoothed[i] = dx[i]
+        else:
+            if np.isnan(dx[i]):
+                dx_smoothed[i] = dx_smoothed[i-1]
+            else:
+                dx_smoothed[i] = dx_smoothed[i-1] + (dx[i] - dx_smoothed[i-1]) / length
+    
+    # Calcular ADX como Wilder Smoothing del DX suavizado
+    for i in range(n):
+        if i < 2 * length - 1:
             adx[i] = np.nan
         else:
-            adx[i] = np.mean(dx[i-length+1:i+1])
+            if np.isnan(dx_smoothed[i]):
+                adx[i] = adx[i-1] if i > 0 else np.nan
+            else:
+                if i == 0:
+                    adx[i] = dx_smoothed[i]
+                else:
+                    adx[i] = adx[i-1] + (dx_smoothed[i] - adx[i-1]) / length
     
     return {
         'di_plus': di_plus,
@@ -188,90 +183,121 @@ def calcular_adx_di(high, low, close, length=14):
 def calcular_adx_di_pandas(df, high_col='High', low_col='Low', close_col='Close', length=14):
     """
     Versión optimizada usando pandas DataFrame.
+    Implementa correctamente Wilder Smoothing para ADX, DI+ y DI-.
     
     Parámetros:
     -----------
-    df : pd.DataFrame
-        DataFrame con los datos OHLC
-    high_col : str
-        Nombre de la columna de precios máximos (por defecto 'High')
-    low_col : str
-        Nombre de la columna de precios mínimos (por defecto 'Low')
-    close_col : str
-        Nombre de la columna de precios de cierre (por defecto 'Close')
-    length : int
-        Período para el cálculo (por defecto 14)
+    df : pd.DataFrame - DataFrame con los datos OHLC
+    high_col : str - Nombre de la columna de precios máximos
+    low_col : str - Nombre de la columna de precios mínimos
+    close_col : str - Nombre de la columna de precios de cierre
+    length : int - Período para el cálculo (por defecto 14)
     
     Retorna:
     --------
     pd.DataFrame con las columnas DI+, DI-, ADX añadidas
     """
-    resultado = df.copy()
-    
-    # Calcular True Range
-    resultado['tr'] = np.maximum(
-        resultado[high_col] - resultado[low_col],
-        np.maximum(
-            np.abs(resultado[high_col] - resultado[close_col].shift(1)),
-            np.abs(resultado[low_col] - resultado[close_col].shift(1))
+    try:
+        resultado = df.copy()
+        
+        # Calcular True Range
+        resultado['tr'] = np.maximum(
+            resultado[high_col] - resultado[low_col],
+            np.maximum(
+                np.abs(resultado[high_col] - resultado[close_col].shift(1)),
+                np.abs(resultado[low_col] - resultado[close_col].shift(1))
+            )
         )
-    )
-    
-    # Calcular Directional Movement
-    resultado['up_move'] = resultado[high_col] - resultado[high_col].shift(1)
-    resultado['down_move'] = resultado[low_col].shift(1) - resultado[low_col]
-    
-    # DirectionalMovementPlus
-    resultado['dm_plus'] = np.where(
-        (resultado['up_move'] > resultado['down_move']) & (resultado['up_move'] > 0),
-        resultado['up_move'],
-        0
-    )
-    
-    # DirectionalMovementMinus
-    resultado['dm_minus'] = np.where(
-        (resultado['down_move'] > resultado['up_move']) & (resultado['down_move'] > 0),
-        resultado['down_move'],
-        0
-    )
-    
-    # Suavizado usando la fórmula de Pine Script
-    smoothed_tr = np.zeros(len(resultado))
-    smoothed_dm_plus = np.zeros(len(resultado))
-    smoothed_dm_minus = np.zeros(len(resultado))
-    
-    for i in range(len(resultado)):
-        if i == 0:
-            smoothed_tr[i] = resultado['tr'].iloc[i]
-            smoothed_dm_plus[i] = resultado['dm_plus'].iloc[i]
-            smoothed_dm_minus[i] = resultado['dm_minus'].iloc[i]
-        else:
-            smoothed_tr[i] = smoothed_tr[i-1] - smoothed_tr[i-1]/length + resultado['tr'].iloc[i]
-            smoothed_dm_plus[i] = smoothed_dm_plus[i-1] - smoothed_dm_plus[i-1]/length + resultado['dm_plus'].iloc[i]
-            smoothed_dm_minus[i] = smoothed_dm_minus[i-1] - smoothed_dm_minus[i-1]/length + resultado['dm_minus'].iloc[i]
-    
-    resultado['smoothed_tr'] = smoothed_tr
-    resultado['smoothed_dm_plus'] = smoothed_dm_plus
-    resultado['smoothed_dm_minus'] = smoothed_dm_minus
-    
-    # Calcular DI+ y DI-
-    resultado['DI+'] = (resultado['smoothed_dm_plus'] / resultado['smoothed_tr']) * 100
-    resultado['DI-'] = (resultado['smoothed_dm_minus'] / resultado['smoothed_tr']) * 100
-    
-    # Calcular DX
-    di_sum = resultado['DI+'] + resultado['DI-']
-    di_diff = np.abs(resultado['DI+'] - resultado['DI-'])
-    resultado['DX'] = (di_diff / di_sum) * 100
-    
-    # Calcular ADX como SMA de DX
-    resultado['ADX'] = resultado['DX'].rolling(window=length).mean()
-    
-    # Limpiar columnas intermedias
-    resultado.drop(columns=['tr', 'up_move', 'down_move', 'dm_plus', 'dm_minus', 
-                           'smoothed_tr', 'smoothed_dm_plus', 'smoothed_dm_minus', 'DX'], 
-                   inplace=True)
-    
-    return resultado
+        
+        # Calcular Directional Movement
+        resultado['up_move'] = resultado[high_col] - resultado[high_col].shift(1)
+        resultado['down_move'] = resultado[low_col].shift(1) - resultado[low_col]
+        
+        # DirectionalMovementPlus
+        resultado['dm_plus'] = np.where(
+            (resultado['up_move'] > resultado['down_move']) & (resultado['up_move'] > 0),
+            resultado['up_move'],
+            0
+        )
+        
+        # DirectionalMovementMinus
+        resultado['dm_minus'] = np.where(
+            (resultado['down_move'] > resultado['up_move']) & (resultado['down_move'] > 0),
+            resultado['down_move'],
+            0
+        )
+        
+        # Suavizado usando Wilder Smoothing (igual que TradingView)
+        smoothed_tr = np.zeros(len(resultado))
+        smoothed_dm_plus = np.zeros(len(resultado))
+        smoothed_dm_minus = np.zeros(len(resultado))
+        
+        for i in range(len(resultado)):
+            if i == 0:
+                smoothed_tr[i] = resultado['tr'].iloc[i]
+                smoothed_dm_plus[i] = resultado['dm_plus'].iloc[i]
+                smoothed_dm_minus[i] = resultado['dm_minus'].iloc[i]
+            else:
+                # Wilder Smoothing: smoothed[i] = smoothed[i-1] + (value[i] - smoothed[i-1]) / length
+                smoothed_tr[i] = smoothed_tr[i-1] + (resultado['tr'].iloc[i] - smoothed_tr[i-1]) / length
+                smoothed_dm_plus[i] = smoothed_dm_plus[i-1] + (resultado['dm_plus'].iloc[i] - smoothed_dm_plus[i-1]) / length
+                smoothed_dm_minus[i] = smoothed_dm_minus[i-1] + (resultado['dm_minus'].iloc[i] - smoothed_dm_minus[i-1]) / length
+        
+        resultado['smoothed_tr'] = smoothed_tr
+        resultado['smoothed_dm_plus'] = smoothed_dm_plus
+        resultado['smoothed_dm_minus'] = smoothed_dm_minus
+        
+        # Calcular DI+ y DI-
+        resultado['DI+'] = (resultado['smoothed_dm_plus'] / resultado['smoothed_tr']) * 100
+        resultado['DI-'] = (resultado['smoothed_dm_minus'] / resultado['smoothed_tr']) * 100
+        
+        # Calcular DX
+        di_sum = resultado['DI+'] + resultado['DI-']
+        di_diff = np.abs(resultado['DI+'] - resultado['DI-'])
+        resultado['DX'] = np.where(di_sum > 0, (di_diff / di_sum) * 100, np.nan)
+        
+        # Aplicar Wilder Smoothing al DX
+        dx_wilder = np.zeros(len(resultado))
+        for i in range(len(resultado)):
+            if i == 0:
+                dx_wilder[i] = resultado['DX'].iloc[i] if not np.isnan(resultado['DX'].iloc[i]) else 0
+            else:
+                if np.isnan(resultado['DX'].iloc[i]):
+                    dx_wilder[i] = dx_wilder[i-1]
+                else:
+                    dx_wilder[i] = dx_wilder[i-1] + (resultado['DX'].iloc[i] - dx_wilder[i-1]) / length
+        
+        # Calcular ADX como Wilder Smoothing del DX suavizado
+        adx = np.full(len(resultado), np.nan)
+        for i in range(len(resultado)):
+            if i < 2 * length - 1:
+                adx[i] = np.nan
+            else:
+                if np.isnan(dx_wilder[i]):
+                    adx[i] = adx[i-1] if i > 0 else np.nan
+                else:
+                    if i == 0:
+                        adx[i] = dx_wilder[i]
+                    else:
+                        adx[i] = adx[i-1] + (dx_wilder[i] - adx[i-1]) / length
+        
+        resultado['ADX'] = adx
+        
+        # Limpiar columnas intermedias
+        resultado.drop(columns=['tr', 'up_move', 'down_move', 'dm_plus', 'dm_minus', 
+                               'smoothed_tr', 'smoothed_dm_plus', 'smoothed_dm_minus', 'DX'], 
+                       inplace=True)
+        
+        return resultado
+        
+    except Exception as e:
+        print(f"⚠️ Error en calcular_adx_di_pandas: {e}")
+        # Retornar DataFrame original con columnas NaN
+        resultado = df.copy()
+        resultado['DI+'] = np.nan
+        resultado['DI-'] = np.nan
+        resultado['ADX'] = np.nan
+        return resultado
 
 
 # ---------------------------
@@ -4165,180 +4191,259 @@ class TradingBot:
         return 1 - (ss_res / ss_tot)
 
     def generar_grafico_profesional(self, simbolo, info_canal, datos_mercado, precio_entrada, tp, sl, tipo_operacion):
+        \"\"\"
+        Genera un gráfico profesional con velas, indicadores y niveles de trading.
+        Compatible con la versión corregida de ADX/DI+/DI-.
+        \"\"\"
         try:
             config_optima = self.config_optima_por_simbolo.get(simbolo)
             if not config_optima:
+                print(f\"⚠️ No se encontró config_optima para {simbolo}\")
                 return None
             
-            # Usar API de Bitget FUTUROS si está disponible
+            # ═══════════════════════════════════════════════════════════════════
+            # OBTENER DATOS DE PRECIO (Manteniendo lógica original de Bitget/Binance)
+            # ═══════════════════════════════════════════════════════════════════
+            klines = None
+            fuente_datos = \"\"
+            
+            # Usar API de Bitget FUTUROS si está disponible (lógica original)
             if self.bitget_client:
-                klines = self.bitget_client.get_klines(simbolo, config_optima['timeframe'], config_optima['num_velas'])
-                if klines:
-                    df_data = []
-                    for kline in klines:
-                        df_data.append({
-                            'Date': pd.to_datetime(int(kline[0]), unit='ms'),
-                            'Open': float(kline[1]),
-                            'High': float(kline[2]),
-                            'Low': float(kline[3]),
-                            'Close': float(kline[4]),
-                            'Volume': float(kline[5])
-                        })
-                    df = pd.DataFrame(df_data)
-                    df.set_index('Date', inplace=True)
-                else:
-                    # Fallback a Binance
-                    url = "https://api.binance.com/api/v3/klines"
+                try:
+                    klines = self.bitget_client.get_klines(simbolo, config_optima['timeframe'], config_optima['num_velas'])
+                    if klines:
+                        fuente_datos = \"Bitget\"
+                except Exception as e:
+                    print(f\"⚠️ Error con Bitget: {e}\")
+            
+            # Fallback a Binance
+            if not klines:
+                try:
+                    url = \"https://api.binance.com/api/v3/klines\"
                     params = {
                         'symbol': simbolo,
                         'interval': config_optima['timeframe'],
                         'limit': config_optima['num_velas']
                     }
                     respuesta = requests.get(url, params=params, timeout=10)
-                    klines = respuesta.json()
-                    df_data = []
-                    for kline in klines:
-                        df_data.append({
-                            'Date': pd.to_datetime(kline[0], unit='ms'),
-                            'Open': float(kline[1]),
-                            'High': float(kline[2]),
-                            'Low': float(kline[3]),
-                            'Close': float(kline[4]),
-                            'Volume': float(kline[5])
-                        })
-                    df = pd.DataFrame(df_data)
-                    df.set_index('Date', inplace=True)
-            else:
-                # Fallback a Binance
-                url = "https://api.binance.com/api/v3/klines"
-                params = {
-                    'symbol': simbolo,
-                    'interval': config_optima['timeframe'],
-                    'limit': config_optima['num_velas']
-                }
-                respuesta = requests.get(url, params=params, timeout=10)
-                klines = respuesta.json()
-                df_data = []
-                for kline in klines:
+                    if respuesta.status_code == 200:
+                        klines = respuesta.json()
+                        fuente_datos = \"Binance\"
+                except Exception as e:
+                    print(f\"⚠️ Error con Binance: {e}\")
+            
+            if not klines:
+                print(f\"⚠️ No se pudieron obtener datos para {simbolo}\")
+                return None
+            
+            # ═══════════════════════════════════════════════════════════════════
+            # CREAR DATAFRAME
+            # ═══════════════════════════════════════════════════════════════════
+            df_data = []
+            for kline in klines:
+                try:
                     df_data.append({
-                        'Date': pd.to_datetime(kline[0], unit='ms'),
+                        'Date': pd.to_datetime(int(kline[0]), unit='ms'),
                         'Open': float(kline[1]),
                         'High': float(kline[2]),
                         'Low': float(kline[3]),
                         'Close': float(kline[4]),
                         'Volume': float(kline[5])
                     })
-                df = pd.DataFrame(df_data)
-                df.set_index('Date', inplace=True)
+                except (IndexError, ValueError) as e:
+                    print(f\"⚠️ Error procesando kline: {e}\")
+                    continue
             
+            if not df_data:
+                print(f\"⚠️ No hay datos válidos para {simbolo}\")
+                return None
+            
+            df = pd.DataFrame(df_data)
+            df.set_index('Date', inplace=True)
+            
+            # ═══════════════════════════════════════════════════════════════════
+            # CALCULAR LÍNEAS DE CANAL (RESISTENCIA Y SOPORTE)
+            # ═══════════════════════════════════════════════════════════════════
             tiempos_reg = list(range(len(df)))
             resistencia_values = []
             soporte_values = []
-            for i, t in enumerate(tiempos_reg):
-                resist = info_canal['pendiente_resistencia'] * t + \
-                        (info_canal['resistencia'] - info_canal['pendiente_resistencia'] * tiempos_reg[-1])
-                sop = info_canal['pendiente_soporte'] * t + \
-                     (info_canal['soporte'] - info_canal['pendiente_soporte'] * tiempos_reg[-1])
-                resistencia_values.append(resist)
-                soporte_values.append(sop)
-            df['Resistencia'] = resistencia_values
-            df['Soporte'] = soporte_values
-            period = 14
-            k_period = 3
-            d_period = 3
-            stoch_k_values = []
-            for i in range(len(df)):
-                if i < period - 1:
-                    stoch_k_values.append(np.nan)
-                else:
-                    highest_high = df['High'].iloc[i-period+1:i+1].max()
-                    lowest_low = df['Low'].iloc[i-period+1:i+1].min()
-                    if highest_high == lowest_low:
-                        k = 50
+            
+            try:
+                pend_res = info_canal.get('pendiente_resistencia', 0)
+                pend_sop = info_canal.get('pendiente_soporte', 0)
+                resist = info_canal.get('resistencia', df['Close'].iloc[-1])
+                soport = info_canal.get('soporte', df['Close'].iloc[-1])
+                ultimo_t = tiempos_reg[-1] if tiempos_reg else 0
+                
+                for t in tiempos_reg:
+                    resist_val = pend_res * t + (resist - pend_res * ultimo_t)
+                    sop_val = pend_sop * t + (soport - pend_sop * ultimo_t)
+                    resistencia_values.append(resist_val)
+                    soporte_values.append(sop_val)
+                
+                df['Resistencia'] = resistencia_values
+                df['Soporte'] = soporte_values
+            except Exception as e:
+                print(f\"⚠️ Error calculando canal: {e}\")
+                df['Resistencia'] = df['Close'].max()
+                df['Soporte'] = df['Close'].min()
+            
+            # ═══════════════════════════════════════════════════════════════════
+            # CALCULAR STOCHASTIC OSCILLATOR
+            # ═══════════════════════════════════════════════════════════════════
+            try:
+                period = 14
+                k_period = 3
+                d_period = 3
+                
+                stoch_k_values = []
+                for i in range(len(df)):
+                    if i < period - 1:
+                        stoch_k_values.append(np.nan)
                     else:
-                        k = 100 * (df['Close'].iloc[i] - lowest_low) / (highest_high - lowest_low)
-                    stoch_k_values.append(k)
-            k_smoothed = []
-            for i in range(len(stoch_k_values)):
-                if i < k_period - 1:
-                    k_smoothed.append(stoch_k_values[i])
-                else:
-                    k_avg = sum(stoch_k_values[i-k_period+1:i+1]) / k_period
-                    k_smoothed.append(k_avg)
-            stoch_d_values = []
-            for i in range(len(k_smoothed)):
-                if i < d_period - 1:
-                    stoch_d_values.append(k_smoothed[i])
-                else:
-                    d = sum(k_smoothed[i-d_period+1:i+1]) / d_period
-                    stoch_d_values.append(d)
-            df['Stoch_K'] = k_smoothed
-            df['Stoch_D'] = stoch_d_values
+                        highest_high = df['High'].iloc[i-period+1:i+1].max()
+                        lowest_low = df['Low'].iloc[i-period+1:i+1].min()
+                        if highest_high == lowest_low:
+                            k = 50
+                        else:
+                            k = 100 * (df['Close'].iloc[i] - lowest_low) / (highest_high - lowest_low)
+                        stoch_k_values.append(k)
+                
+                # Suavizar %K con SMA
+                k_smoothed = []
+                for i in range(len(stoch_k_values)):
+                    if i < k_period - 1:
+                        k_smoothed.append(stoch_k_values[i])
+                    else:
+                        window = stoch_k_values[i-k_period+1:i+1]
+                        valores_validos = [v for v in window if not np.isnan(v)]
+                        if valores_validos:
+                            k_smoothed.append(sum(valores_validos) / len(valores_validos))
+                        else:
+                            k_smoothed.append(50)
+                
+                # Calcular %D como SMA de %K suavizado
+                stoch_d_values = []
+                for i in range(len(k_smoothed)):
+                    if i < d_period - 1:
+                        stoch_d_values.append(k_smoothed[i])
+                    else:
+                        window = k_smoothed[i-d_period+1:i+1]
+                        valores_validos = [v for v in window if not np.isnan(v)]
+                        if valores_validos:
+                            stoch_d_values.append(sum(valores_validos) / len(valores_validos))
+                        else:
+                            stoch_d_values.append(50)
+                
+                df['Stoch_K'] = k_smoothed
+                df['Stoch_D'] = stoch_d_values
+            except Exception as e:
+                print(f\"⚠️ Error calculando Stochastic: {e}\")
+                df['Stoch_K'] = 50
+                df['Stoch_D'] = 50
             
-            # =====================================================
-            # NUEVO: Calcular ADX, DI+ y DI- usando la función importada
-            # =====================================================
-            adx_results = calcular_adx_di(
-                df['High'].values, 
-                df['Low'].values, 
-                df['Close'].values, 
-                length=14
-            )
-            df['ADX'] = adx_results['adx']
-            df['DI+'] = adx_results['di_plus']
-            df['DI-'] = adx_results['di_minus']
+            # ═══════════════════════════════════════════════════════════════════
+            # CALCULAR ADX, DI+ Y DI- (CON WILDERS SMOOTHING)
+            # ═══════════════════════════════════════════════════════════════════
+            try:
+                adx_results = calcular_adx_di(
+                    df['High'].values, 
+                    df['Low'].values, 
+                    df['Close'].values, 
+                    length=14
+                )
+                
+                # Llenar NaN con valores vecinos para evitar errores en mpf
+                df['ADX'] = pd.Series(adx_results['adx']).fillna(method='ffill').fillna(method='bfill').values
+                df['DI+'] = pd.Series(adx_results['di_plus']).fillna(method='ffill').fillna(method='bfill').values
+                df['DI-'] = pd.Series(adx_results['di_minus']).fillna(method='ffill').fillna(method='bfill').values
+                
+            except Exception as e:
+                print(f\"⚠️ Error calculando ADX/DI: {e}\")
+                # Valores por defecto si falla
+                df['ADX'] = 20
+                df['DI+'] = 20
+                df['DI-'] = 20
             
-            apds = [
-                mpf.make_addplot(df['Resistencia'], color='#5444ff', linestyle='--', width=2, panel=0),
-                mpf.make_addplot(df['Soporte'], color="#5444ff", linestyle='--', width=2, panel=0),
-            ]
-            if precio_entrada and tp and sl:
-                entry_line = [precio_entrada] * len(df)
-                tp_line = [tp] * len(df)
-                sl_line = [sl] * len(df)
-                apds.append(mpf.make_addplot(entry_line, color='#FFD700', linestyle='-', width=2, panel=0))
-                apds.append(mpf.make_addplot(tp_line, color='#00FF00', linestyle='-', width=2, panel=0))
-                apds.append(mpf.make_addplot(sl_line, color='#FF0000', linestyle='-', width=2, panel=0))
-            apds.append(mpf.make_addplot(df['Stoch_K'], color='#00BFFF', width=1.5, panel=1, ylabel='Stochastic'))
-            apds.append(mpf.make_addplot(df['Stoch_D'], color='#FF6347', width=1.5, panel=1))
-            overbought = [80] * len(df)
-            oversold = [20] * len(df)
-            apds.append(mpf.make_addplot(overbought, color="#E7E4E4", linestyle='--', width=0.8, panel=1, alpha=0.5))
-            apds.append(mpf.make_addplot(oversold, color="#E9E4E4", linestyle='--', width=0.8, panel=1, alpha=0.5))
-            
-            # =====================================================
-            # NUEVO: Añadir panel de ADX, DI+ y DI- (Panel 2)
-            # =====================================================
-            apds.append(mpf.make_addplot(df['DI+'], color='#00FF00', width=1.5, panel=2, ylabel='ADX/DI'))
-            apds.append(mpf.make_addplot(df['DI-'], color='#FF0000', width=1.5, panel=2))
-            apds.append(mpf.make_addplot(df['ADX'], color='#000080', width=2, panel=2))  # Navy color
-            # Línea threshold en ADX
-            adx_threshold = [20] * len(df)
-            apds.append(mpf.make_addplot(adx_threshold, color="#808080", linestyle='--', width=0.8, panel=2, alpha=0.5))
-            
-            fig, axes = mpf.plot(df, type='candle', style='nightclouds',
-                               title=f'{simbolo} | {tipo_operacion} | {config_optima["timeframe"]} | BITGET FUTUROS + Breakout+Reentry',
-                               ylabel='Precio',
-                               addplot=apds,
-                               volume=False,
-                               returnfig=True,
-                               figsize=(14, 12),
-                               panel_ratios=(3, 1, 1))
-            axes[2].set_ylim([0, 100])
-            axes[2].grid(True, alpha=0.3)
-            # Configurar panel ADX (axes[3])
-            if len(axes) > 3:
-                axes[3].set_ylim([0, 100])
-                axes[3].grid(True, alpha=0.3)
-                axes[3].set_ylabel('ADX/DI', fontsize=8)
-            
-            buf = BytesIO()
-            plt.savefig(buf, format='png', dpi=100, bbox_inches='tight', facecolor='#1a1a1a')
-            buf.seek(0)
-            plt.close(fig)
-            return buf
+            # ═══════════════════════════════════════════════════════════════════
+            # CREAR PLOT CON MPFINANCE
+            # ═══════════════════════════════════════════════════════════════════
+            try:
+                apds = [
+                    mpf.make_addplot(df['Resistencia'], color='#5444ff', linestyle='--', width=2, panel=0),
+                    mpf.make_addplot(df['Soporte'], color=\"#5444ff\", linestyle='--', width=2, panel=0),
+                ]
+                
+                # Añadir líneas de entrada, TP y SL
+                if precio_entrada and tp and sl:
+                    entry_line = [precio_entrada] * len(df)
+                    tp_line = [tp] * len(df)
+                    sl_line = [sl] * len(df)
+                    apds.append(mpf.make_addplot(entry_line, color='#FFD700', linestyle='-', width=2, panel=0))
+                    apds.append(mpf.make_addplot(tp_line, color='#00FF00', linestyle='-', width=2, panel=0))
+                    apds.append(mpf.make_addplot(sl_line, color='#FF0000', linestyle='-', width=2, panel=0))
+                
+                # Panel Stochastic (panel 1)
+                apds.append(mpf.make_addplot(df['Stoch_K'], color='#00BFFF', width=1.5, panel=1, ylabel='Stochastic'))
+                apds.append(mpf.make_addplot(df['Stoch_D'], color='#FF6347', width=1.5, panel=1))
+                overbought = [80] * len(df)
+                oversold = [20] * len(df)
+                apds.append(mpf.make_addplot(overbought, color=\"#E7E4E4\", linestyle='--', width=0.8, panel=1, alpha=0.5))
+                apds.append(mpf.make_addplot(oversold, color=\"#E9E4E4\", linestyle='--', width=0.8, panel=1, alpha=0.5))
+                
+                # Panel ADX/DI (panel 2)
+                apds.append(mpf.make_addplot(df['DI+'], color='#00FF00', width=1.5, panel=2, ylabel='ADX/DI'))
+                apds.append(mpf.make_addplot(df['DI-'], color='#FF0000', width=1.5, panel=2))
+                apds.append(mpf.make_addplot(df['ADX'], color='#000080', width=2, panel=2))
+                adx_threshold = [20] * len(df)
+                apds.append(mpf.make_addplot(adx_threshold, color=\"#808080\", linestyle='--', width=0.8, panel=2, alpha=0.5))
+                
+                # Generar figura
+                fig, axes = mpf.plot(df, type='candle', style='nightclouds',
+                                   title=f'{simbolo} | {tipo_operacion} | {config_optima[\"timeframe\"]} | {fuente_datos}',
+                                   ylabel='Precio',
+                                   addplot=apds,
+                                   volume=False,
+                                   returnfig=True,
+                                   figsize=(14, 12),
+                                   panel_ratios=(3, 1, 1))
+                
+                # Configurar axes del panel Stochastic (índice 2)
+                if len(axes) > 2:
+                    try:
+                        axes[2].set_ylim([0, 100])
+                        axes[2].grid(True, alpha=0.3)
+                    except:
+                        pass
+                
+                # Configurar axes del panel ADX (índice 3)
+                if len(axes) > 3:
+                    try:
+                        axes[3].set_ylim([0, 100])
+                        axes[3].grid(True, alpha=0.3)
+                        axes[3].set_ylabel('ADX/DI', fontsize=8)
+                    except:
+                        pass
+                
+                # Guardar figura en buffer
+                buf = BytesIO()
+                plt.savefig(buf, format='png', dpi=100, bbox_inches='tight', facecolor='#1a1a1a')
+                buf.seek(0)
+                plt.close(fig)
+                
+                print(f\"✅ Gráfico generado para {simbolo} desde {fuente_datos}\")
+                return buf
+                
+            except Exception as e:
+                print(f\"⚠️ Error en mpf.plot: {e}\")
+                import traceback
+                traceback.print_exc()
+                return None
+        
         except Exception as e:
-            print(f"⚠️ Error generando gráfico: {e}")
+            print(f\"⚠️ Error general generando gráfico para {simbolo}: {e}\")
+            import traceback
+            traceback.print_exc()
             return None
 
     def enviar_grafico_telegram(self, buf, token, chat_ids):
