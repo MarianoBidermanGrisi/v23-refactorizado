@@ -201,8 +201,9 @@ def calcular_adx_di(high, low, close, length=14):
 
 
 def calcular_adx_di_pandas(df, high_col='High', low_col='Low', close_col='Close', length=14):
-    """
+     """
     Versión optimizada usando pandas DataFrame.
+    Implementa correctamente Wilder Smoothing para ADX, DI+ y DI-.
     
     Parámetros:
     -----------
@@ -250,7 +251,7 @@ def calcular_adx_di_pandas(df, high_col='High', low_col='Low', close_col='Close'
         0
     )
     
-    # Suavizado usando la fórmula de Pine Script
+    # Suavizado usando Wilder Smoothing (igual que TradingView/Pine Script)
     smoothed_tr = np.zeros(len(resultado))
     smoothed_dm_plus = np.zeros(len(resultado))
     smoothed_dm_minus = np.zeros(len(resultado))
@@ -261,9 +262,10 @@ def calcular_adx_di_pandas(df, high_col='High', low_col='Low', close_col='Close'
             smoothed_dm_plus[i] = resultado['dm_plus'].iloc[i]
             smoothed_dm_minus[i] = resultado['dm_minus'].iloc[i]
         else:
-            smoothed_tr[i] = smoothed_tr[i-1] - smoothed_tr[i-1]/length + resultado['tr'].iloc[i]
-            smoothed_dm_plus[i] = smoothed_dm_plus[i-1] - smoothed_dm_plus[i-1]/length + resultado['dm_plus'].iloc[i]
-            smoothed_dm_minus[i] = smoothed_dm_minus[i-1] - smoothed_dm_minus[i-1]/length + resultado['dm_minus'].iloc[i]
+            # Wilder Smoothing: smoothed[i] = smoothed[i-1] + (value[i] - smoothed[i-1]) / length
+            smoothed_tr[i] = smoothed_tr[i-1] + (resultado['tr'].iloc[i] - smoothed_tr[i-1]) / length
+            smoothed_dm_plus[i] = smoothed_dm_plus[i-1] + (resultado['dm_plus'].iloc[i] - smoothed_dm_plus[i-1]) / length
+            smoothed_dm_minus[i] = smoothed_dm_minus[i-1] + (resultado['dm_minus'].iloc[i] - smoothed_dm_minus[i-1]) / length
     
     resultado['smoothed_tr'] = smoothed_tr
     resultado['smoothed_dm_plus'] = smoothed_dm_plus
@@ -278,8 +280,23 @@ def calcular_adx_di_pandas(df, high_col='High', low_col='Low', close_col='Close'
     di_diff = np.abs(resultado['DI+'] - resultado['DI-'])
     resultado['DX'] = (di_diff / di_sum) * 100
     
-    # Calcular ADX como SMA de DX
-    resultado['ADX'] = resultado['DX'].rolling(window=length).mean()
+    # Calcular DX suavizado con Wilder Smoothing
+    dx_wilder = np.zeros(len(resultado))
+    for i in range(len(resultado)):
+        if i == 0:
+            dx_wilder[i] = resultado['DX'].iloc[i]
+        else:
+            dx_wilder[i] = dx_wilder[i-1] + (resultado['DX'].iloc[i] - dx_wilder[i-1]) / length
+    
+    # Calcular ADX como Wilder Smoothing del DX suavizado
+    adx = np.zeros(len(resultado))
+    for i in range(len(resultado)):
+        if i < 2 * length - 1:
+            adx[i] = np.nan
+        else:
+            adx[i] = adx[i-1] + (dx_wilder[i] - adx[i-1]) / length
+    
+    resultado['ADX'] = adx
     
     # Limpiar columnas intermedias
     resultado.drop(columns=['tr', 'up_move', 'down_move', 'dm_plus', 'dm_minus', 
