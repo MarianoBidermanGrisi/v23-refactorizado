@@ -4599,6 +4599,19 @@ class TradingBot:
             Diccionario con los datos de la operación
         """
         try:
+            # Verificar si hay cliente Bitget
+            if not self.bitget_client:
+                logger.warning(f"⚠️ {simbolo}: No hay cliente Bitget disponible")
+                return False
+            
+            # Obtener precio actual del mercado PRIMERO
+            datos = self.obtener_datos_mercado_config(simbolo, '1h', 10)
+            if datos:
+                precio_actual = datos['precio_actual']
+            else:
+                logger.error(f"❌ {simbolo}: No se pudo obtener precio para cierre")
+                return False
+            
             # Determinar la dirección de cierre (contraria a la posición)
             if operacion['tipo'] == 'LONG':
                 lado_cierre = 'sell'
@@ -4607,30 +4620,47 @@ class TradingBot:
                 lado_cierre = 'buy'
                 pos_side = 'short'
             
-            # Obtener tamaño de la posición
-            tamaño = 1  # Por defecto, cerrar 1 contrato
+            # Obtener tamaño de la posición desde Bitget
+            posiciones = self.bitget_client.get_positions(simbolo)
             
-            # Obtener precio actual del mercado
-            datos = self.obtener_datos_mercado_config(simbolo, '1h', 10)
-            if datos:
-                precio_actual = datos['precio_actual']
-            else:
-                logger.error(f"❌ {simbolo}: No se pudo obtener precio para cierre")
+            tamaño_a_cerrar = None
+            
+            # Buscar la posición que queremos cerrar
+            for pos in posiciones:
+                hold_side = pos.get('holdSide', '')
+                if hold_side == pos_side:
+                    disponible = float(pos.get('available', 0))
+                    total = float(pos.get('total', 0))
+                    
+                    if disponible > 0:
+                        tamaño_a_cerrar = int(disponible)
+                        logger.info(f"📊 {simbolo}: Posición {pos_side} - disponible: {disponible}, total: {total}")
+                        break
+                    elif total > 0:
+                        tamaño_a_cerrar = int(total)
+                        logger.info(f"📊 {simbolo}: Posición {pos_side} - cerrando total: {total}")
+                        break
+            
+            if tamaño_a_cerrar is None or tamaño_a_cerrar <= 0:
+                logger.warning(f"⚠️ {simbolo}: No se encontró posición para cerrar")
                 return False
             
-            # Verificar si hay cliente Bitget
-            if not self.bitget_client:
-                logger.warning(f"⚠️ {simbolo}: No hay cliente Bitget disponible")
-                return False
+            # Verificar valor mínimo (mínimo 5 USDT para la mayoría de símbolos)
+            valor_nocional = tamaño_a_cerrar * precio_actual
+            if valor_nocional < 5:
+                tamaño_minimo = math.ceil(5 / precio_actual)
+                logger.info(f"⚠️ {simbolo}: Ajustando tamaño de {tamaño_a_cerrar} a {tamaño_minimo} para cumplir mínimo 5 USDT")
+                tamaño_a_cerrar = tamaño_minimo
             
             # Verificar el modo de cuenta (asumimos modo hedge por defecto)
             is_hedged_account = True
             
             # Colocar orden de cierre
+            logger.info(f"📤 {simbolo}: Cerrando posición {pos_side} con tamaño {tamaño_a_cerrar}, precio: {precio_actual}")
             resultado = self.bitget_client.place_order(
                 symbol=simbolo,
                 side=lado_cierre,
-                size=tamaño,
+                size=tamaño_a_cerrar,
                 order_type='market',
                 posSide=pos_side,
                 is_hedged_account=is_hedged_account
