@@ -4396,6 +4396,373 @@ class TradingBot:
         self.config['entry_margin'] = nuevos_parametros.get('entry_margin', 
                                                              self.config.get('entry_margin', 0.001))
 
+    # ============================================================
+    # FUNCIONES DE PROTECCIÓN DI+/DI- (Capa adicional)
+    # ============================================================
+    
+    def obtener_indicadores_di(self, simbolo, timeframe='1h', num_velas=100):
+        """
+        Obtiene los valores actuales de DI+ y DI- para un símbolo específico.
+        
+        Parámetros:
+        -----------
+        simbolo : str
+            Símbolo del par de trading (ej: 'BTCUSDT')
+        timeframe : str
+            Timeframe para obtener los datos (por defecto '1h')
+        num_velas : int
+            Número de velas a obtener para el cálculo (por defecto 100)
+        
+        Retorna:
+        --------
+        dict con las siguientes claves:
+            - 'di_plus': Valor actual de DI+
+            - 'di_minus': Valor actual de DI-
+            - 'adx': Valor actual del ADX
+            - 'exito': Boolean indicando si la operación fue exitosa
+        """
+        try:
+            # Obtener datos del mercado
+            datos = self.obtener_datos_mercado_config(simbolo, timeframe, num_velas)
+            
+            if not datos or len(datos['cierres']) < 20:
+                logger.warning(f"⚠️ {simbolo}: Datos insuficientes para calcular DI+/DI-")
+                return {
+                    'di_plus': None,
+                    'di_minus': None,
+                    'adx': None,
+                    'exito': False
+                }
+            
+            # Calcular indicadores usando la función existente
+            resultados = calcular_adx_di(
+                datos['maximos'],
+                datos['minimos'],
+                datos['cierres'],
+                length=14
+            )
+            
+            # Obtener los últimos valores (última vela cerrada)
+            di_plus_actual = resultados['di_plus'][-1]
+            di_minus_actual = resultados['di_minus'][-1]
+            adx_actual = resultados['adx'][-1]
+            
+            # Verificar que los valores sean válidos (no NaN)
+            if np.isnan(di_plus_actual) or np.isnan(di_minus_actual):
+                logger.warning(f"⚠️ {simbolo}: Valores DI+/DI- son NaN")
+                return {
+                    'di_plus': None,
+                    'di_minus': None,
+                    'adx': None,
+                    'exito': False
+                }
+            
+            logger.info(f"📊 {simbolo} - DI+: {di_plus_actual:.2f}, DI-: {di_minus_actual:.2f}, ADX: {adx_actual:.2f}")
+            
+            return {
+                'di_plus': di_plus_actual,
+                'di_minus': di_minus_actual,
+                'adx': adx_actual,
+                'exito': True
+            }
+            
+        except Exception as e:
+            logger.error(f"❌ Error obteniendo indicadores DI para {simbolo}: {e}")
+            return {
+                'di_plus': None,
+                'di_minus': None,
+                'adx': None,
+                'exito': False
+            }
+
+    def verificar_salida_dinamica_di(self):
+        """
+        Monitorea las operativas abiertas y cierra automáticamente según las condiciones DI+/DI-.
+        
+        Esta función es una CAPA ADICIONAL DE PROTECCIÓN que funciona en paralelo con los niveles
+        de TP/SL existentes. No reemplaza los niveles de Stop Loss o Take Profit.
+        
+        Lógica de cierre:
+        - LONG: Cierra cuando DI+ < DI- (el momentum alcista ha terminado)
+        - SHORT: Cierra cuando DI- < DI+ (el momentum bajista ha terminado)
+        
+        Retorna:
+        --------
+        list: Lista de símbolos cuyas operativas fueron cerradas por señal DI
+        """
+        if not self.operaciones_activas:
+            return []
+        
+        operativas_cerradas_di = []
+        
+        logger.info(f"🔍 Verificando salida dinámica DI+/DI- para {len(self.operaciones_activas)} operativas...")
+        
+        for simbolo, operacion in list(self.operaciones_activas.items()):
+            try:
+                # Obtener la configuración óptima usada para esta operación
+                config_optima = self.config_optima_por_simbolo.get(simbolo)
+                if not config_optima:
+                    logger.warning(f"⚠️ {simbolo}: No se encontró configuración óptima, usando defaults")
+                    timeframe = '1h'
+                    num_velas = 100
+                else:
+                    timeframe = config_optima['timeframe']
+                    num_velas = config_optima['num_velas']
+                
+                # Obtener indicadores DI actuales
+                indicadores = self.obtener_indicadores_di(simbolo, timeframe, num_velas)
+                
+                if not indicadores['exito']:
+                    logger.warning(f"⚠️ {simbolo}: No se pudieron obtener indicadores DI, saltando verificación")
+                    continue
+                
+                di_plus = indicadores['di_plus']
+                di_minus = indicadores['di_minus']
+                tipo_operacion = operacion['tipo']
+                
+                # Guardar los valores DI al momento del cierre para el log
+                operacion['di_plus_cierre'] = di_plus
+                operacion['di_minus_cierre'] = di_minus
+                
+                # Evaluar condiciones de cierre según el tipo de operación
+                condicion_cumplida = False
+                razon_cierre = ""
+                
+                if tipo_operacion == "LONG":
+                    # LONG: Cerrar cuando DI+ < DI- (el momentum alcista ha terminado)
+                    if di_plus < di_minus:
+                        condicion_cumplida = True
+                        razon_cierre = f"DI+ ({di_plus:.2f}) < DI- ({di_minus:.2f}) - Reversión bajista"
+                        logger.warning(f"🔴 {simbolo} - CONDICIÓN DE CIERRE LONG: {razon_cierre}")
+                        
+                elif tipo_operacion == "SHORT":
+                    # SHORT: Cerrar cuando DI- < DI+ (el momentum bajista ha terminado)
+                    if di_minus < di_plus:
+                        condicion_cumplida = True
+                        razon_cierre = f"DI- ({di_minus:.2f}) < DI+ ({di_plus:.2f}) - Reversión alcista"
+                        logger.warning(f"🟢 {simbolo} - CONDICIÓN DE CIERRE SHORT: {razon_cierre}")
+                
+                if condicion_cumplida:
+                    # Cerrar la operación
+                    logger.info(f"🛑 {simbolo}: Cerrando operación por señal DI+/DI-")
+                    
+                    # Intentar cerrar en Bitget si está disponible
+                    if self.bitget_client and operacion.get('operacion_ejecutada', False):
+                        try:
+                            self._cerrar_operacion_bitget(simbolo, operacion)
+                        except Exception as e:
+                            logger.error(f"❌ Error cerrando en Bitget: {e}")
+                    
+                    # Registrar la operación como cerrada por señal DI
+                    datos_operacion = self._registrar_cierre_di(simbolo, operacion, razon_cierre)
+                    
+                    operativas_cerradas_di.append(simbolo)
+                    
+                    # Enviar notificación Telegram
+                    token = self.config.get('telegram_token')
+                    chats = self.config.get('telegram_chat_ids', [])
+                    if token and chats:
+                        mensaje = self._generar_mensaje_cierre_di(datos_operacion, razon_cierre)
+                        try:
+                            self._enviar_telegram_simple(mensaje, token, chats)
+                        except Exception as e:
+                            logger.error(f"❌ Error enviando notificación de cierre DI: {e}")
+                    
+                    # Eliminar de operativas activas
+                    del self.operaciones_activas[simbolo]
+                    
+                    if simbolo in self.senales_enviadas:
+                        self.senales_enviadas.remove(simbolo)
+                    
+                    logger.info(f"✅ {simbolo}: Operación cerrada por señal DI+/DI-")
+            
+            except Exception as e:
+                logger.error(f"❌ Error verificando salida DI para {simbolo}: {e}")
+                continue
+        
+        if operativas_cerradas_di:
+            logger.info(f"✅ Total de operativas cerradas por señal DI: {len(operativas_cerradas_di)}")
+            # Guardar estado después del cierre
+            self.guardar_estado()
+        
+        return operativas_cerradas_di
+
+    def _cerrar_operacion_bitget(self, simbolo, operacion):
+        """
+        Cierra una operación en Bitget Futures.
+        
+        Parámetros:
+        -----------
+        simbolo : str
+            Símbolo del par de trading
+        operacion : dict
+            Diccionario con los datos de la operación
+        """
+        try:
+            # Determinar la dirección de cierre (contraria a la posición)
+            if operacion['tipo'] == 'LONG':
+                lado_cierre = 'sell'
+                pos_side = 'long'
+            else:
+                lado_cierre = 'buy'
+                pos_side = 'short'
+            
+            # Obtener tamaño de la posición
+            tamaño = 1  # Por defecto, cerrar 1 contrato
+            
+            # Obtener precio actual del mercado
+            datos = self.obtener_datos_mercado_config(simbolo, '1h', 10)
+            if datos:
+                precio_actual = datos['precio_actual']
+            else:
+                logger.error(f"❌ {simbolo}: No se pudo obtener precio para cierre")
+                return False
+            
+            # Verificar si hay cliente Bitget
+            if not self.bitget_client:
+                logger.warning(f"⚠️ {simbolo}: No hay cliente Bitget disponible")
+                return False
+            
+            # Verificar el modo de cuenta (asumimos modo hedge por defecto)
+            is_hedged_account = True
+            
+            # Colocar orden de cierre
+            resultado = self.bitget_client.place_order(
+                symbol=simbolo,
+                side=lado_cierre,
+                size=tamaño,
+                order_type='market',
+                posSide=pos_side,
+                is_hedged_account=is_hedged_account
+            )
+            
+            if resultado:
+                logger.info(f"✅ {simbolo}: Orden de cierre ejecutada en Bitget")
+                return True
+            else:
+                logger.error(f"❌ {simbolo}: Error al ejecutar orden de cierre")
+                return False
+                
+        except Exception as e:
+            logger.error(f"❌ Error en _cerrar_operacion_bitget para {simbolo}: {e}")
+            return False
+
+    def _registrar_cierre_di(self, simbolo, operacion, razon_cierre):
+        """
+        Registra una operación cerrada por señal DI en el log.
+        
+        Parámetros:
+        -----------
+        simbolo : str
+            Símbolo del par de trading
+        operacion : dict
+            Diccionario con los datos de la operación
+        razon_cierre : str
+            Razón del cierre por señal DI
+        
+        Retorna:
+        --------
+        dict: Datos de la operación para el registro
+        """
+        # Obtener precio actual
+        try:
+            datos = self.obtener_datos_mercado_config(simbolo, '1h', 10)
+            precio_actual = datos['precio_actual'] if datos else operacion['precio_entrada']
+        except:
+            precio_actual = operacion['precio_entrada']
+        
+        # Calcular PnL
+        if operacion['tipo'] == 'LONG':
+            pnl_percent = ((precio_actual - operacion['precio_entrada']) / operacion['precio_entrada']) * 100
+        else:
+            pnl_percent = ((operacion['precio_entrada'] - precio_actual) / operacion['precio_entrada']) * 100
+        
+        # Calcular duración
+        try:
+            tiempo_entrada = datetime.fromisoformat(operacion['timestamp_entrada'])
+            duracion_minutos = (datetime.now() - tiempo_entrada).total_seconds() / 60
+        except:
+            duracion_minutos = 0
+        
+        # Crear datos de operación
+        datos_operacion = {
+            'timestamp': datetime.now().isoformat(),
+            'symbol': simbolo,
+            'tipo': operacion['tipo'],
+            'precio_entrada': operacion['precio_entrada'],
+            'take_profit': operacion.get('take_profit', 0),
+            'stop_loss': operacion.get('stop_loss', 0),
+            'precio_salida': precio_actual,
+            'resultado': 'DI_CIERRE',
+            'pnl_percent': pnl_percent,
+            'duracion_minutos': duracion_minutos,
+            'angulo_tendencia': operacion.get('angulo_tendencia', 0),
+            'pearson': operacion.get('pearson', 0),
+            'r2_score': operacion.get('r2_score', 0),
+            'ancho_canal_relativo': operacion.get('ancho_canal_relativo', 0),
+            'ancho_canal_porcentual': operacion.get('ancho_canal_porcentual', 0),
+            'nivel_fuerza': operacion.get('nivel_fuerza', 1),
+            'timeframe_utilizado': operacion.get('timeframe_utilizado', 'N/A'),
+            'velas_utilizadas': operacion.get('velas_utilizadas', 0),
+            'stoch_k': operacion.get('stoch_k', 0),
+            'stoch_d': operacion.get('stoch_d', 0),
+            'di_plus': operacion.get('di_plus', 0),
+            'di_minus': operacion.get('di_minus', 0),
+            'di_plus_cierre': operacion.get('di_plus_cierre', 0),
+            'di_minus_cierre': operacion.get('di_minus_cierre', 0),
+            'razon_cierre': razon_cierre,
+            'breakout_usado': operacion.get('breakout_usado', False),
+            'operacion_ejecutada': operacion.get('operacion_ejecutada', False)
+        }
+        
+        # Registrar en el log
+        self.registrar_operacion(datos_operacion)
+        
+        return datos_operacion
+
+    def _generar_mensaje_cierre_di(self, datos_operacion, razon_cierre):
+        """
+        Genera el mensaje de notificación para un cierre por señal DI.
+        
+        Parámetros:
+        -----------
+        datos_operacion : dict
+            Datos de la operación cerrada
+        razon_cierre : str
+            Razón del cierre
+        
+        Retorna:
+        --------
+        str: Mensaje formateado para Telegram
+        """
+        emoji = "🛡️"
+        
+        mensaje = f"""
+{emoji} <b>OPERACIÓN CERRADA POR SEÑAL DI - {datos_operacion['symbol']}</b>
+⚠️ <b>RESULTADO: CIERRE POR PROTECCIÓN DI</b>
+
+📊 <b>Tipo:</b> {datos_operacion['tipo']}
+💡 <b>Razón:</b> {razon_cierre}
+
+💰 <b>Entrada:</b> {datos_operacion['precio_entrada']:.8f}
+🎯 <b>Salida:</b> {datos_operacion['precio_salida']:.8f}
+📈 <b>PnL %:</b> {datos_operacion['pnl_percent']:.2f}%
+⏰ <b>Duración:</b> {datos_operacion['duracion_minutos']:.1f} minutos
+
+📊 <b>DI+ Entrada:</b> {datos_operacion['di_plus']:.2f}
+📊 <b>DI- Entrada:</b> {datos_operacion['di_minus']:.2f}
+📊 <b>DI+ Cierre:</b> {datos_operacion['di_plus_cierre']:.2f}
+📊 <b>DI- Cierre:</b> {datos_operacion['di_minus_cierre']:.2f}
+
+📏 <b>Ángulo:</b> {datos_operacion['angulo_tendencia']:.1f}°
+📊 <b>Pearson:</b> {datos_operacion['pearson']:.3f}
+🎯 <b>R²:</b> {datos_operacion['r2_score']:.3f}
+
+🕒 <b>Timestamp:</b> {datos_operacion['timestamp']}
+        """
+        
+        return mensaje
+
     def ejecutar_analisis(self):
         """Ejecutar análisis completo incluyendo sincronización con Bitget"""
         try:
@@ -4427,7 +4794,14 @@ class TradingBot:
             if cierres:
                 print(f"     📊 Operaciones cerradas: {', '.join(cierres)}")
             
-            # 6. Guardar estado después del análisis
+            # 6. Verificar salida dinámica por señal DI+/DI- (PROTECCIÓN ADICIONAL)
+            # Esta función monitorea las operativas abiertas y cierra automáticamente
+            # cuando el momentum cambia: LONG cierra cuando DI+ < DI-, SHORT cuando DI- < DI+
+            cierres_di = self.verificar_salida_dinamica_di()
+            if cierres_di:
+                print(f"     🛡️ Operaciones cerradas por señal DI: {', '.join(cierres_di)}")
+            
+            # 7. Guardar estado después del análisis
             self.guardar_estado()
             
             # 7. Escanear mercado para nuevas señales
