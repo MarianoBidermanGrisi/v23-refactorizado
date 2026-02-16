@@ -2921,6 +2921,12 @@ class TradingBot:
             logger.info(f"🔍 DEBUG Telegram - token presente: {'✅' if token else '⚠️'}")
             logger.info(f"🔍 DEBUG Telegram - chat_ids: {chats}")
             logger.info(f"🔍 DEBUG Telegram - mensaje generado: {'✅' if mensaje_cierre else '⚠️'}")
+
+            # DEBUG TEMPORAL - Eliminar después de probar
+            logger.info(f"🔍 CONFIG TELEGRAM EN PROCESAR_CIERRE:")
+            logger.info(f"   - self.config.keys(): {list(self.config.keys())}")
+            logger.info(f"   - telegram_token: {self.config.get('telegram_token', 'NO EXISTE')[:10] if self.config.get('telegram_token') else 'None'}...")
+            logger.info(f"   - telegram_chat_ids: {self.config.get('telegram_chat_ids', 'NO EXISTE')}")
         
             if token and chats:
                 try:
