@@ -2916,30 +2916,22 @@ class TradingBot:
             mensaje_cierre = self.generar_mensaje_cierre(datos_operacion)
             token = self.config.get('telegram_token')
             chats = self.config.get('telegram_chat_ids', [])
-
-            # DEBUG: Verificar configuración Telegram
-            logger.info(f"🔍 DEBUG Telegram - token presente: {'✅' if token else '⚠️'}")
-            logger.info(f"🔍 DEBUG Telegram - chat_ids: {chats}")
-            logger.info(f"🔍 DEBUG Telegram - mensaje generado: {'✅' if mensaje_cierre else '⚠️'}")
-
-            # DEBUG TEMPORAL - Eliminar después de probar
-            logger.info(f"🔍 CONFIG TELEGRAM EN PROCESAR_CIERRE:")
-            logger.info(f"   - self.config.keys(): {list(self.config.keys())}")
-            logger.info(f"   - telegram_token: {self.config.get('telegram_token', 'NO EXISTE')[:10] if self.config.get('telegram_token') else 'None'}...")
-            logger.info(f"   - telegram_chat_ids: {self.config.get('telegram_chat_ids', 'NO EXISTE')}")
-        
+            
+            # Debug: mostrar valores obtenidos
+            logger.info(f"🔍 Debug Telegram - Token: {token[:10] if token else 'None'}...")
+            logger.info(f"🔍 Debug Telegram - Chats: {chats}")
+            
             if token and chats:
                 try:
-                   exito = self._enviar_telegram_simple(mensaje_cierre, token, chats)
-                   if exito:
-                       logger.info(f"✅ Notificación Telegram enviada para {simbolo}")
-                   else:
-                       logger.warning(f"⚠️ Telegram API retornó fallo para {simbolo}")
+                    resultado_telegram = self._enviar_telegram_simple(mensaje_cierre, token, chats)
+                    if resultado_telegram:
+                        logger.info(f"✅ Telegram: Notificación enviada para {simbolo}")
+                    else:
+                        logger.error(f"❌ Telegram: Error al enviar notificación para {simbolo}")
                 except Exception as e:
-                    logger.error(f"⚠️ Error enviando notificación Telegram: {e}")
+                    logger.error(f"❌ Error enviando Telegram para {simbolo}: {e}")
             else:
-                logger.warning(f"⚠️ Telegram no configurado correctamente - token: {'✅' if token else '⚠️'}, chats: {'✅' if chats else '⚠️'}")
-     
+                logger.warning(f"⚠️ Telegram no configurado - token: {bool(token)}, chats: {chats}")
             
             # Marcar como procesada para evitar duplicados
             self.operaciones_cerradas_registradas.append(simbolo)
@@ -3181,17 +3173,11 @@ class TradingBot:
     def enviar_alerta_breakout(self, simbolo, tipo_breakout, info_canal, datos_mercado, config_optima):
         """
         Envía alerta de BREAKOUT detectado a Telegram con gráfico
-        MODIFICADO: Respeta la variable enviar_alertas_breakout
         """
-    
-        # ✅ IMPORTANTE: Esta línea DEBE estar dentro del método (indentada con 4 espacios)
-        enviar_alertas = self.config.get('enviar_alertas_breakout', True)
-    
         precio_cierre = datos_mercado['cierres'][-1]
         resistencia = info_canal['resistencia']
         soporte = info_canal['soporte']
         direccion_canal = info_canal['direccion']
-    
         # Determinar tipo de ruptura
         if tipo_breakout == "BREAKOUT_LONG":
             emoji_principal = "🚀"
@@ -3207,52 +3193,32 @@ class TradingBot:
             direccion_emoji = "⬆️"
             contexto = f"Canal {direccion_canal} → Rechazo desde RESISTENCIA"
             expectativa = "posible entrada en SHORT"
-    
         # Mensaje de alerta
         mensaje = f"""
-    {emoji_principal} ¡BREAKOUT DETECTADO! - {simbolo}
-    ⚠️ {tipo_texto} {direccion_emoji}
-    ⏰ Hora: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
-    📍 {expectativa}
-    """
-
-       # ─────────────────────────────────────────────────────
-       #  LÓGICA CONDICIONAL - TODO DENTRO DEL MÉTODO
-       # ─────────────────────────────────────────────────────
-       if enviar_alertas:
-          # Comportamiento original (Telegram + Gráficos)
-          token = self.config.get('telegram_token')
-          chat_ids = self.config.get('telegram_chat_ids', [])
-          if token and chat_ids:
-              try:
-                  print(f"     📊 Generando gráfico de breakout para {simbolo}...")
-                  buf = self.generar_grafico_breakout(simbolo, info_canal, datos_mercado, tipo_breakout, config_optima)
-                  if buf:
-                         print(f"     📨 Enviando alerta de breakout por Telegram...")
-                         self.enviar_grafico_telegram(buf, token, chat_ids)
-                         time.sleep(0.5)
-                         self._enviar_telegram_simple(mensaje, token, chat_ids)
-                         print(f"     ✅ Alerta de breakout enviada para {simbolo}")
-                  else:
-                      self._enviar_telegram_simple(mensaje, token, chat_ids)
-                      print(f"     ⚠️ Alerta enviada sin gráfico")
-              except Exception as e:
-                  print(f"     ❌ Error enviando alerta de breakout: {e}")
-          else:
-              print(f"     📢 Breakout detectado en {simbolo} (sin Telegram)")
-      else:
-          # ─────────────────────────────────────────────────────
-          #  SOLO PRINT EN CONSOLA - SIN TELEGRAM - SIN SPAM
-          # ─────────────────────────────────────────────────────
-          print(f"\n{'='*60}")
-          print(f"     📢 BREAKOUT DETECTADO (Solo Consola) - {simbolo}")
-          print(f"     {tipo_texto} {direccion_emoji}")
-          print(f"     {nivel_roto}")
-          print(f"     {contexto}")
-          print(f"     {expectativa}")
-          print(f"     ⏰ {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-          print(f"{'='*60}\n")
-
+{emoji_principal} <b>¡BREAKOUT DETECTADO! - {simbolo}</b>
+⚠️ <b>{tipo_texto}</b> {direccion_emoji}
+⏰ <b>Hora:</b> {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+📍 {expectativa}
+        """
+        token = self.config.get('telegram_token')
+        chat_ids = self.config.get('telegram_chat_ids', [])
+        if token and chat_ids:
+            try:
+                print(f"     📊 Generando gráfico de breakout para {simbolo}...")
+                buf = self.generar_grafico_breakout(simbolo, info_canal, datos_mercado, tipo_breakout, config_optima)
+                if buf:
+                    print(f"     📨 Enviando alerta de breakout por Telegram...")
+                    self.enviar_grafico_telegram(buf, token, chat_ids)
+                    time.sleep(0.5)
+                    self._enviar_telegram_simple(mensaje, token, chat_ids)
+                    print(f"     ✅ Alerta de breakout enviada para {simbolo}")
+                else:
+                    self._enviar_telegram_simple(mensaje, token, chat_ids)
+                    print(f"     ⚠️ Alerta enviada sin gráfico")
+            except Exception as e:
+                print(f"     ❌ Error enviando alerta de breakout: {e}")
+        else:
+            print(f"     📢 Breakout detectado en {simbolo} (sin Telegram)")
 
     def generar_grafico_breakout(self, simbolo, info_canal, datos_mercado, tipo_breakout, config_optima):
         """
@@ -4036,11 +4002,22 @@ class TradingBot:
                 mensaje_cierre = self.generar_mensaje_cierre(datos_operacion)
                 token = self.config.get('telegram_token')
                 chats = self.config.get('telegram_chat_ids', [])
+                
+                # Debug: mostrar valores obtenidos
+                logger.info(f"🔍 Debug Telegram CIERRE - Token: {token[:10] if token else 'None'}...")
+                logger.info(f"🔍 Debug Telegram CIERRE - Chats: {chats}")
+                
                 if token and chats:
                     try:
-                        self._enviar_telegram_simple(mensaje_cierre, token, chats)
-                    except Exception:
-                        pass
+                        resultado_telegram = self._enviar_telegram_simple(mensaje_cierre, token, chats)
+                        if resultado_telegram:
+                            logger.info(f"✅ Telegram: Notificación de cierre enviada para {simbolo}")
+                        else:
+                            logger.error(f"❌ Telegram: Error al enviar notificación de cierre para {simbolo}")
+                    except Exception as e:
+                        logger.error(f"❌ Error enviando Telegram cierre para {simbolo}: {e}")
+                else:
+                    logger.warning(f"⚠️ Telegram no configurado en CIERRE - token: {bool(token)}, chats: {chats}")
                 self.registrar_operacion(datos_operacion)
                 operaciones_cerradas.append(simbolo)
                 del self.operaciones_activas[simbolo]
@@ -4406,6 +4383,7 @@ class TradingBot:
 
     def _enviar_telegram_simple(self, mensaje, token, chat_ids):
         if not token or not chat_ids:
+            logger.warning("⚠️ Telegram: token o chat_ids no proporcionados")
             return False
         resultados = []
         for chat_id in chat_ids:
@@ -4413,8 +4391,14 @@ class TradingBot:
             payload = {'chat_id': chat_id, 'text': mensaje, 'parse_mode': 'HTML'}
             try:
                 r = requests.post(url, json=payload, timeout=10)
-                resultados.append(r.status_code == 200)
-            except Exception:
+                if r.status_code == 200:
+                    logger.info(f"✅ Telegram: Mensaje enviado a {chat_id}")
+                    resultados.append(True)
+                else:
+                    logger.error(f"❌ Telegram: Error {r.status_code} - {r.text}")
+                    resultados.append(False)
+            except Exception as e:
+                logger.error(f"❌ Telegram: Excepción enviando a {chat_id}: {e}")
                 resultados.append(False)
         return any(resultados)
 
@@ -4596,7 +4580,7 @@ class TradingBot:
                         try:
                             self._cerrar_operacion_bitget(simbolo, operacion)
                         except Exception as e:
-                            logger.error(f"⚠️ Error cerrando en Bitget: {e}")
+                            logger.error(f"❌ Error cerrando en Bitget: {e}")
                     
                     # Registrar la operación como cerrada por señal DI
                     datos_operacion = self._registrar_cierre_di(simbolo, operacion, razon_cierre)
@@ -4606,25 +4590,12 @@ class TradingBot:
                     # Enviar notificación Telegram
                     token = self.config.get('telegram_token')
                     chats = self.config.get('telegram_chat_ids', [])
-
-                    #  DEBUG: Verificar configuración Telegram
-                    logger.info(f" DEBUG Telegram CIERRE DI - token presente: {'✅' if token else '⚠️'}")
-                    logger.info(f" DEBUG Telegram CIERRE DI - chat_ids: {chats}")
-                    logger.info(f" DEBUG Telegram CIERRE DI - simbolo: {simbolo}")
-
                     if token and chats:
+                        mensaje = self._generar_mensaje_cierre_di(datos_operacion, razon_cierre)
                         try:
-                           mensaje = self._generar_mensaje_cierre_di(datos_operacion, razon_cierre)
-                           exito = self._enviar_telegram_simple(mensaje, token, chats)
-                           if exito:
-                               logger.info(f"✅ Notificación Telegram enviada para cierre DI de {simbolo}")
-                           else:
-                               logger.warning(f"⚠️ Telegram API retornó fallo para cierre DI de {simbolo}")
+                            self._enviar_telegram_simple(mensaje, token, chats)
                         except Exception as e:
-                           logger.error(f"⚠️ Error enviando notificación de cierre DI: {e}")
-                    else: 
-                        logger.warning(f"⚠️ Telegram NO configurado para cierre DI - token: {'✅' if token else '⚠️'}, chats: {'✅' if chats else '⚠️'}")
-                    
+                            logger.error(f"❌ Error enviando notificación de cierre DI: {e}")
                     
                     # Eliminar de operativas activas
                     del self.operaciones_activas[simbolo]
@@ -5048,8 +5019,7 @@ def crear_config_desde_entorno():
         'bitget_passphrase': os.environ.get('BITGET_PASSPHRASE'),
         'webhook_url': os.environ.get('WEBHOOK_URL'),
         'ejecutar_operaciones_automaticas': os.environ.get('EJECUTAR_OPERACIONES_AUTOMATICAS', 'false').lower() == 'true',
-        'leverage_por_defecto': min(int(os.environ.get('LEVERAGE_POR_DEFECTO', '10')), 10),
-        'enviar_alertas_breakout': False
+        'leverage_por_defecto': min(int(os.environ.get('LEVERAGE_POR_DEFECTO', '10')), 10)
     }
 
 # ---------------------------
