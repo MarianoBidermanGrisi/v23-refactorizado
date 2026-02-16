@@ -4570,7 +4570,7 @@ class TradingBot:
                         try:
                             self._cerrar_operacion_bitget(simbolo, operacion)
                         except Exception as e:
-                            logger.error(f"❌ Error cerrando en Bitget: {e}")
+                            logger.error(f"⚠️ Error cerrando en Bitget: {e}")
                     
                     # Registrar la operación como cerrada por señal DI
                     datos_operacion = self._registrar_cierre_di(simbolo, operacion, razon_cierre)
@@ -4580,12 +4580,25 @@ class TradingBot:
                     # Enviar notificación Telegram
                     token = self.config.get('telegram_token')
                     chats = self.config.get('telegram_chat_ids', [])
+
+                    #  DEBUG: Verificar configuración Telegram
+                    logger.info(f" DEBUG Telegram CIERRE DI - token presente: {'✅' if token else '⚠️'}")
+                    logger.info(f" DEBUG Telegram CIERRE DI - chat_ids: {chats}")
+                    logger.info(f" DEBUG Telegram CIERRE DI - simbolo: {simbolo}")
+
                     if token and chats:
-                        mensaje = self._generar_mensaje_cierre_di(datos_operacion, razon_cierre)
                         try:
-                            self._enviar_telegram_simple(mensaje, token, chats)
-                        except Exception as e:
-                            logger.error(f"❌ Error enviando notificación de cierre DI: {e}")
+                           mensaje = self._generar_mensaje_cierre_di(datos_operacion, razon_cierre)
+                           exito = self._enviar_telegram_simple(mensaje, token, chats)
+                           if exito:
+                               logger.info(f"✅ Notificación Telegram enviada para cierre DI de {simbolo}")
+                           else:
+                               logger.warning(f"⚠️ Telegram API retornó fallo para cierre DI de {simbolo}")
+                       except Exception as e:
+                           logger.error(f"⚠️ Error enviando notificación de cierre DI: {e}")
+                   else: 
+                       logger.warning(f"⚠️ Telegram NO configurado para cierre DI - token: {'✅' if token else '⚠️'}, chats: {'✅' if chats else '⚠️'}")
+                    
                     
                     # Eliminar de operativas activas
                     del self.operaciones_activas[simbolo]
