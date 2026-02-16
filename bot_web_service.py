@@ -2916,11 +2916,24 @@ class TradingBot:
             mensaje_cierre = self.generar_mensaje_cierre(datos_operacion)
             token = self.config.get('telegram_token')
             chats = self.config.get('telegram_chat_ids', [])
+
+            # DEBUG: Verificar configuración Telegram
+            logger.info(f"🔍 DEBUG Telegram - token presente: {'✅' if token else '⚠️'}")
+            logger.info(f"🔍 DEBUG Telegram - chat_ids: {chats}")
+            logger.info(f"🔍 DEBUG Telegram - mensaje generado: {'✅' if mensaje_cierre else '⚠️'}")
+        
             if token and chats:
                 try:
-                    self._enviar_telegram_simple(mensaje_cierre, token, chats)
-                except Exception:
-                    pass
+                   exito = self._enviar_telegram_simple(mensaje_cierre, token, chats)
+                   if exito:
+                       logger.info(f"✅ Notificación Telegram enviada para {simbolo}")
+                   else:
+                       logger.warning(f"⚠️ Telegram API retornó fallo para {simbolo}")
+                except Exception as e:
+                    logger.error(f"⚠️ Error enviando notificación Telegram: {e}")
+            else:
+                logger.warning(f"⚠️ Telegram no configurado correctamente - token: {'✅' if token else '⚠️'}, chats: {'✅' if chats else '⚠️'}")
+     
             
             # Marcar como procesada para evitar duplicados
             self.operaciones_cerradas_registradas.append(simbolo)
