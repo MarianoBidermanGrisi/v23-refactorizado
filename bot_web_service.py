@@ -3182,6 +3182,10 @@ class TradingBot:
         """
         Envía alerta de BREAKOUT detectado a Telegram con gráfico
         """
+        
+        # Verificar configuración antes de enviar
+        enviar_alertas = self.config.get('enviar_alertas_breakout', True)
+        
         precio_cierre = datos_mercado['cierres'][-1]
         resistencia = info_canal['resistencia']
         soporte = info_canal['soporte']
@@ -3208,9 +3212,12 @@ class TradingBot:
 ⏰ <b>Hora:</b> {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
 📍 {expectativa}
         """
+    # --- LÓGICA MODIFICADA ---
+    if enviar_alertas:
+        # Comportamiento original (Telegram)
         token = self.config.get('telegram_token')
         chat_ids = self.config.get('telegram_chat_ids', [])
-        if token and chat_ids:
+        if token and chat_ids:  
             try:
                 print(f"     📊 Generando gráfico de breakout para {simbolo}...")
                 buf = self.generar_grafico_breakout(simbolo, info_canal, datos_mercado, tipo_breakout, config_optima)
@@ -3227,6 +3234,18 @@ class TradingBot:
                 print(f"     ❌ Error enviando alerta de breakout: {e}")
         else:
             print(f"     📢 Breakout detectado en {simbolo} (sin Telegram)")
+    else:
+        # --- NUEVO COMPORTAMIENTO: SOLO PRINT EN CONSOLA ---
+        print(f"\n{'='*60}")
+        print(f"     📢 BREAKOUT DETECTADO (Solo Consola) - {simbolo}")
+        print(f"     {tipo_texto} {direccion_emoji}")
+        print(f"     {nivel_roto}")
+        print(f"     {contexto}")
+        print(f"     {expectativa}")
+        print(f"     ⏰ {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+        print(f"{'='*60}\n")
+        # No se envía a Telegram, no se genera gráfico, no hay spam  
+
 
     def generar_grafico_breakout(self, simbolo, info_canal, datos_mercado, tipo_breakout, config_optima):
         """
@@ -5023,6 +5042,7 @@ def crear_config_desde_entorno():
         'webhook_url': os.environ.get('WEBHOOK_URL'),
         'ejecutar_operaciones_automaticas': os.environ.get('EJECUTAR_OPERACIONES_AUTOMATICAS', 'false').lower() == 'true',
         'leverage_por_defecto': min(int(os.environ.get('LEVERAGE_POR_DEFECTO', '10')), 10)
+        'enviar_alertas_breakout': os.environ.get('ENVIAR_ALERTAS_BREAKOUT', 'true').lower() == 'true'
     }
 
 # ---------------------------
