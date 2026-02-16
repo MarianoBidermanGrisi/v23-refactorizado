@@ -4594,10 +4594,10 @@ class TradingBot:
                                logger.info(f"✅ Notificación Telegram enviada para cierre DI de {simbolo}")
                            else:
                                logger.warning(f"⚠️ Telegram API retornó fallo para cierre DI de {simbolo}")
-                       except Exception as e:
+                        except Exception as e:
                            logger.error(f"⚠️ Error enviando notificación de cierre DI: {e}")
-                   else: 
-                       logger.warning(f"⚠️ Telegram NO configurado para cierre DI - token: {'✅' if token else '⚠️'}, chats: {'✅' if chats else '⚠️'}")
+                    else: 
+                        logger.warning(f"⚠️ Telegram NO configurado para cierre DI - token: {'✅' if token else '⚠️'}, chats: {'✅' if chats else '⚠️'}")
                     
                     
                     # Eliminar de operativas activas
