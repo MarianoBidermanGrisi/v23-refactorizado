@@ -5042,7 +5042,7 @@ def crear_config_desde_entorno():
         'webhook_url': os.environ.get('WEBHOOK_URL'),
         'ejecutar_operaciones_automaticas': os.environ.get('EJECUTAR_OPERACIONES_AUTOMATICAS', 'false').lower() == 'true',
         'leverage_por_defecto': min(int(os.environ.get('LEVERAGE_POR_DEFECTO', '10')), 10),
-        'enviar_alertas_breakout': os.environ.get('ENVIAR_ALERTAS_BREAKOUT', 'true').lower() == 'false'
+        'enviar_alertas_breakout': false
     }
 
 # ---------------------------
