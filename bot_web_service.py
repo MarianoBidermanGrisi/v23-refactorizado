@@ -3212,26 +3212,26 @@ class TradingBot:
 ⏰ <b>Hora:</b> {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
 📍 {expectativa}
         """
-    # --- LÓGICA MODIFICADA ---
-    if enviar_alertas:
-        # Comportamiento original (Telegram)
-        token = self.config.get('telegram_token')
-        chat_ids = self.config.get('telegram_chat_ids', [])
-        if token and chat_ids:  
-            try:
-                print(f"     📊 Generando gráfico de breakout para {simbolo}...")
-                buf = self.generar_grafico_breakout(simbolo, info_canal, datos_mercado, tipo_breakout, config_optima)
-                if buf:
-                    print(f"     📨 Enviando alerta de breakout por Telegram...")
-                    self.enviar_grafico_telegram(buf, token, chat_ids)
-                    time.sleep(0.5)
-                    self._enviar_telegram_simple(mensaje, token, chat_ids)
-                    print(f"     ✅ Alerta de breakout enviada para {simbolo}")
-                else:
-                    self._enviar_telegram_simple(mensaje, token, chat_ids)
-                    print(f"     ⚠️ Alerta enviada sin gráfico")
-            except Exception as e:
-                print(f"     ❌ Error enviando alerta de breakout: {e}")
+        # --- LÓGICA MODIFICADA ---
+        if enviar_alertas:
+            # Comportamiento original (Telegram)
+            token = self.config.get('telegram_token')
+            chat_ids = self.config.get('telegram_chat_ids', [])
+            if token and chat_ids:  
+                try:
+                   print(f"     📊 Generando gráfico de breakout para {simbolo}...")
+                   buf = self.generar_grafico_breakout(simbolo, info_canal, datos_mercado, tipo_breakout, config_optima)
+                   if buf:
+                       print(f"     📨 Enviando alerta de breakout por Telegram...")
+                       self.enviar_grafico_telegram(buf, token, chat_ids)
+                       time.sleep(0.5)
+                       self._enviar_telegram_simple(mensaje, token, chat_ids)
+                       print(f"     ✅ Alerta de breakout enviada para {simbolo}")
+                   else:
+                       self._enviar_telegram_simple(mensaje, token, chat_ids)
+                       print(f"     ⚠️ Alerta enviada sin gráfico")
+               except Exception as e:
+                   print(f"     ❌ Error enviando alerta de breakout: {e}")
         else:
             print(f"     📢 Breakout detectado en {simbolo} (sin Telegram)")
     else:
@@ -5042,7 +5042,7 @@ def crear_config_desde_entorno():
         'webhook_url': os.environ.get('WEBHOOK_URL'),
         'ejecutar_operaciones_automaticas': os.environ.get('EJECUTAR_OPERACIONES_AUTOMATICAS', 'false').lower() == 'true',
         'leverage_por_defecto': min(int(os.environ.get('LEVERAGE_POR_DEFECTO', '10')), 10),
-        'enviar_alertas_breakout': false
+        'enviar_alertas_breakout': False
     }
 
 # ---------------------------
