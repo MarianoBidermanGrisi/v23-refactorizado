@@ -3207,15 +3207,10 @@ class TradingBot:
 
     def enviar_alerta_breakout(self, simbolo, tipo_breakout, info_canal, datos_mercado, config_optima):
         """
-        Envía alerta de BREAKOUT detectado - Solo print en consola si está habilitado
+        Envía alerta de BREAKOUT detectado:
+        - true = print en consola (sin Telegram)
+        - false = enviar a Telegram con gráficos (funcionalidad original)
         """
-        # Verificar si las alertas de breakout están habilitadas
-        alertas_habilitadas = self.config.get('alertas_breakout_consola', False)
-        
-        if not alertas_habilitadas:
-            # Si las alertas no están habilitadas, no hacer nada
-            return
-        
         precio_cierre = datos_mercado['cierres'][-1]
         resistencia = info_canal['resistencia']
         soporte = info_canal['soporte']
@@ -3237,22 +3232,54 @@ class TradingBot:
             contexto = f"Canal {direccion_canal} → Rechazo desde RESISTENCIA"
             expectativa = "posible entrada en SHORT"
         
+        # Verificar si las alertas de breakout están habilitadas para consola
+        alertas_consola = self.config.get('alertas_breakout_consola', False)
+        
         # ============================================================
-        # ALERTA DE BREAKOUT - SOLO PRINT EN CONSOLA
+        # LÓGICA: true = console, false = Telegram
         # ============================================================
-        print(f"\n{'='*60}")
-        print(f"{emoji_principal} ¡BREAKOUT DETECTADO! - {simbolo}")
-        print(f"⚠️ {tipo_texto} {direccion_emoji}")
-        print(f"⏰ Hora: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-        print(f"📍 {expectativa}")
-        print(f"📊 Precio actual: {precio_cierre:.8f}")
-        print(f"📊 Resistencia: {resistencia:.8f}")
-        print(f"📊 Soporte: {soporte:.8f}")
-        print(f"📊 Dirección canal: {direccion_canal}")
-        print(f"📊 Contexto: {contexto}")
-        print(f"📏 Ancho canal: {info_canal.get('ancho_canal_porcentual', 0):.1f}%")
-        print(f"📊 Timeframe: {config_optima['timeframe']}")
-        print(f"{'='*60}\n")
+        if alertas_consola:
+            # true = SOLO print en consola (sin Telegram)
+            print(f"\n{'='*60}")
+            print(f"{emoji_principal} ¡BREAKOUT DETECTADO! - {simbolo}")
+            print(f"⚠️ {tipo_texto} {direccion_emoji}")
+            print(f"⏰ Hora: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+            print(f"📍 {expectativa}")
+            print(f"📊 Precio actual: {precio_cierre:.8f}")
+            print(f"📊 Resistencia: {resistencia:.8f}")
+            print(f"📊 Soporte: {soporte:.8f}")
+            print(f"📊 Dirección canal: {direccion_canal}")
+            print(f"📊 Contexto: {contexto}")
+            print(f"📏 Ancho canal: {info_canal.get('ancho_canal_porcentual', 0):.1f}%")
+            print(f"📊 Timeframe: {config_optima['timeframe']}")
+            print(f"{'='*60}\n")
+        else:
+            # false = enviar a Telegram con gráficos (funcionalidad original)
+            mensaje = f"""
+{emoji_principal} <b>¡BREAKOUT DETECTADO! - {simbolo}</b>
+⚠️ <b>{tipo_texto}</b> {direccion_emoji}
+⏰ <b>Hora:</b> {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+📍 {expectativa}
+            """
+            token = self.config.get('telegram_token')
+            chat_ids = self.config.get('telegram_chat_ids', [])
+            if token and chat_ids:
+                try:
+                    print(f"     📊 Generando gráfico de breakout para {simbolo}...")
+                    buf = self.generar_grafico_breakout(simbolo, info_canal, datos_mercado, tipo_breakout, config_optima)
+                    if buf:
+                        print(f"     📨 Enviando alerta de breakout por Telegram...")
+                        self.enviar_grafico_telegram(buf, token, chat_ids)
+                        time.sleep(0.5)
+                        self._enviar_telegram_simple(mensaje, token, chat_ids)
+                        print(f"     ✅ Alerta de breakout enviada para {simbolo}")
+                    else:
+                        self._enviar_telegram_simple(mensaje, token, chat_ids)
+                        print(f"     ⚠️ Alerta enviada sin gráfico")
+                except Exception as e:
+                    print(f"     ❌ Error enviando alerta de breakout: {e}")
+            else:
+                print(f"     📢 Breakout detectado en {simbolo} (sin Telegram)")
 
     def generar_grafico_breakout(self, simbolo, info_canal, datos_mercado, tipo_breakout, config_optima):
         """
@@ -3621,6 +3648,9 @@ class TradingBot:
         senales_encontradas = 0
         for simbolo in simbolos_a_analizar:
             try:
+                # Inicializar tipo_operacion para evitar errores de variable no definida
+                tipo_operacion = None
+                
                 if simbolo in self.operaciones_activas:
                     # Verificar si es operación manual del usuario
                     es_manual = self.operaciones_activas[simbolo].get('operacion_manual_usuario', False)
