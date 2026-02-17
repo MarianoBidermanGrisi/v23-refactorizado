@@ -4382,24 +4382,50 @@ class TradingBot:
         return exito
 
     def _enviar_telegram_simple(self, mensaje, token, chat_ids):
+        """
+        Envía mensaje a Telegram con manejo robusto de errores de formato HTML.
+        
+        Intenta enviar con parse_mode='HTML', y si falla, envía sin formato.
+        """
         if not token or not chat_ids:
             logger.warning("⚠️ Telegram: token o chat_ids no proporcionados")
             return False
+        
         resultados = []
+        
         for chat_id in chat_ids:
             url = f"https://api.telegram.org/bot{token}/sendMessage"
+            
+            # Primero intentar con HTML
             payload = {'chat_id': chat_id, 'text': mensaje, 'parse_mode': 'HTML'}
+            
             try:
                 r = requests.post(url, json=payload, timeout=10)
+                
                 if r.status_code == 200:
                     logger.info(f"✅ Telegram: Mensaje enviado a {chat_id}")
                     resultados.append(True)
                 else:
-                    logger.error(f"❌ Telegram: Error {r.status_code} - {r.text}")
-                    resultados.append(False)
+                    # Error de parsing HTML - intentar sin formato
+                    if 'can\'t parse entities' in r.text or 'Unsupported start tag' in r.text:
+                        logger.warning(f"⚠️ Telegram: Error de formato HTML, intentando sin formato...")
+                        payload_sin_formato = {'chat_id': chat_id, 'text': mensaje}
+                        r_sin_formato = requests.post(url, json=payload_sin_formato, timeout=10)
+                        
+                        if r_sin_formato.status_code == 200:
+                            logger.info(f"✅ Telegram: Mensaje enviado sin formato a {chat_id}")
+                            resultados.append(True)
+                        else:
+                            logger.error(f"❌ Telegram: Error sin formato {r_sin_formato.status_code} - {r_sin_formato.text}")
+                            resultados.append(False)
+                    else:
+                        logger.error(f"❌ Telegram: Error {r.status_code} - {r.text}")
+                        resultados.append(False)
+                        
             except Exception as e:
                 logger.error(f"❌ Telegram: Excepción enviando a {chat_id}: {e}")
                 resultados.append(False)
+        
         return any(resultados)
 
     def reoptimizar_periodicamente(self):
@@ -4796,8 +4822,19 @@ class TradingBot:
         """
         emoji = "🛡️"
         
-        mensaje = f"""
-{emoji} <b>OPERACIÓN CERRADA POR SEÑAL DI - {datos_operacion['symbol']}</b>
+        # Función para limpiar valores que pueden ser NaN o None
+        def limpiar_valor(valor, default=0):
+            if valor is None or (isinstance(valor, float) and (np.isnan(valor) or np.isinf(valor))):
+                return default
+            return valor
+        
+        # Limpiar los valores DI para evitar problemas de formato
+        di_plus_entrada = limpiar_valor(datos_operacion.get('di_plus', 0))
+        di_minus_entrada = limpiar_valor(datos_operacion.get('di_minus', 0))
+        di_plus_cierre = limpiar_valor(datos_operacion.get('di_plus_cierre', 0))
+        di_minus_cierre = limpiar_valor(datos_operacion.get('di_minus_cierre', 0))
+        
+        mensaje = f"""{emoji} <b>OPERACIÓN CERRADA POR SEÑAL DI - {datos_operacion['symbol']}</b>
 ⚠️ <b>RESULTADO: CIERRE POR PROTECCIÓN DI</b>
 
 📊 <b>Tipo:</b> {datos_operacion['tipo']}
@@ -4808,17 +4845,16 @@ class TradingBot:
 📈 <b>PnL %:</b> {datos_operacion['pnl_percent']:.2f}%
 ⏰ <b>Duración:</b> {datos_operacion['duracion_minutos']:.1f} minutos
 
-📊 <b>DI+ Entrada:</b> {datos_operacion['di_plus']:.2f}
-📊 <b>DI- Entrada:</b> {datos_operacion['di_minus']:.2f}
-📊 <b>DI+ Cierre:</b> {datos_operacion['di_plus_cierre']:.2f}
-📊 <b>DI- Cierre:</b> {datos_operacion['di_minus_cierre']:.2f}
+📊 <b>DI+ Entrada:</b> {di_plus_entrada:.2f}
+📊 <b>DI- Entrada:</b> {di_minus_entrada:.2f}
+📊 <b>DI+ Cierre:</b> {di_plus_cierre:.2f}
+📊 <b>DI- Cierre:</b> {di_minus_cierre:.2f}
 
 📏 <b>Ángulo:</b> {datos_operacion['angulo_tendencia']:.1f}°
 📊 <b>Pearson:</b> {datos_operacion['pearson']:.3f}
 🎯 <b>R²:</b> {datos_operacion['r2_score']:.3f}
 
-🕒 <b>Timestamp:</b> {datos_operacion['timestamp']}
-        """
+🕒 <b>Timestamp:</b> {datos_operacion['timestamp']}"""
         
         return mensaje
 
