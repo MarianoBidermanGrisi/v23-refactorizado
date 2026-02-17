@@ -3233,7 +3233,7 @@ class TradingBot:
             expectativa = "posible entrada en SHORT"
         
         # Verificar si las alertas de breakout están habilitadas para consola
-        alertas_consola = self.config.get('alertas_breakout_consola', False)
+        alertas_consola = self.config.get('alertas_breakout_consola', True)
         
         # ============================================================
         # LÓGICA: true = console, false = Telegram
