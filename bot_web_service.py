@@ -378,7 +378,7 @@ SIMBOLOS_OMITIDOS = {
     # stablecoins y relacionados
     'USDTUSDT', 'USDCUSDT', 'DAIUSDT', 'TUSDUSDT', 'BUSDUSDT',
     # velas y fractional
-    'BTCVUSDT', 'ETHWUSDT','ADAUSDT',
+    'BTCVUSDT', 'ETHWUSDT',
     # duplicados y errores comunes
     'LUNA2USDT', 'LUNAUSDT',
     # futuros perpetuos con sufijos especiales (ya no disponibles o renombrados)
@@ -3207,12 +3207,20 @@ class TradingBot:
 
     def enviar_alerta_breakout(self, simbolo, tipo_breakout, info_canal, datos_mercado, config_optima):
         """
-        Envía alerta de BREAKOUT detectado a Telegram con gráfico
+        Envía alerta de BREAKOUT detectado - Solo print en consola si está habilitado
         """
+        # Verificar si las alertas de breakout están habilitadas
+        alertas_habilitadas = self.config.get('alertas_breakout_consola', False)
+        
+        if not alertas_habilitadas:
+            # Si las alertas no están habilitadas, no hacer nada
+            return
+        
         precio_cierre = datos_mercado['cierres'][-1]
         resistencia = info_canal['resistencia']
         soporte = info_canal['soporte']
         direccion_canal = info_canal['direccion']
+        
         # Determinar tipo de ruptura
         if tipo_breakout == "BREAKOUT_LONG":
             emoji_principal = "🚀"
@@ -3228,32 +3236,23 @@ class TradingBot:
             direccion_emoji = "⬆️"
             contexto = f"Canal {direccion_canal} → Rechazo desde RESISTENCIA"
             expectativa = "posible entrada en SHORT"
-        # Mensaje de alerta
-        mensaje = f"""
-{emoji_principal} <b>¡BREAKOUT DETECTADO! - {simbolo}</b>
-⚠️ <b>{tipo_texto}</b> {direccion_emoji}
-⏰ <b>Hora:</b> {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
-📍 {expectativa}
-        """
-        token = self.config.get('telegram_token')
-        chat_ids = self.config.get('telegram_chat_ids', [])
-        if token and chat_ids:
-            try:
-                print(f"     📊 Generando gráfico de breakout para {simbolo}...")
-                buf = self.generar_grafico_breakout(simbolo, info_canal, datos_mercado, tipo_breakout, config_optima)
-                if buf:
-                    print(f"     📨 Enviando alerta de breakout por Telegram...")
-                    self.enviar_grafico_telegram(buf, token, chat_ids)
-                    time.sleep(0.5)
-                    self._enviar_telegram_simple(mensaje, token, chat_ids)
-                    print(f"     ✅ Alerta de breakout enviada para {simbolo}")
-                else:
-                    self._enviar_telegram_simple(mensaje, token, chat_ids)
-                    print(f"     ⚠️ Alerta enviada sin gráfico")
-            except Exception as e:
-                print(f"     ❌ Error enviando alerta de breakout: {e}")
-        else:
-            print(f"     📢 Breakout detectado en {simbolo} (sin Telegram)")
+        
+        # ============================================================
+        # ALERTA DE BREAKOUT - SOLO PRINT EN CONSOLA
+        # ============================================================
+        print(f"\n{'='*60}")
+        print(f"{emoji_principal} ¡BREAKOUT DETECTADO! - {simbolo}")
+        print(f"⚠️ {tipo_texto} {direccion_emoji}")
+        print(f"⏰ Hora: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+        print(f"📍 {expectativa}")
+        print(f"📊 Precio actual: {precio_cierre:.8f}")
+        print(f"📊 Resistencia: {resistencia:.8f}")
+        print(f"📊 Soporte: {soporte:.8f}")
+        print(f"📊 Dirección canal: {direccion_canal}")
+        print(f"📊 Contexto: {contexto}")
+        print(f"📏 Ancho canal: {info_canal.get('ancho_canal_porcentual', 0):.1f}%")
+        print(f"📊 Timeframe: {config_optima['timeframe']}")
+        print(f"{'='*60}\n")
 
     def generar_grafico_breakout(self, simbolo, info_canal, datos_mercado, tipo_breakout, config_optima):
         """
@@ -3698,8 +3697,9 @@ class TradingBot:
                 if simbolo not in self.esperando_reentry:
                     # ============================================================
                     # NUEVO: Verificar cooldown DI antes de detectar breakout
+                    # En este punto no sabemos la dirección, así que verificamos solo por símbolo
                     # ============================================================
-                    en_cooldown, razon_cooldown = self.verificar_cooldown_di(simbolo, tipo_operacion)
+                    en_cooldown, razon_cooldown = self.verificar_cooldown_di(simbolo)
                     if en_cooldown:
                         print(f"   🛡️ {simbolo} - {razon_cooldown}")
                         continue
@@ -5188,6 +5188,10 @@ def crear_config_desde_entorno():
         # NUEVO: Configuración de cooldown después de cierre por señal DI
         # ============================================================
         'cooldown_di_minutos': int(os.environ.get('COOLDOWN_DI_MINUTOS', '60')),  # 60 minutos por defecto
+        # ============================================================
+        # NUEVO: Configuración de alertas de breakout en consola
+        # ============================================================
+        'alertas_breakout_consola': os.environ.get('ALERTAS_BREAKOUT_CONSOLA', 'false').lower() == 'true',
         'telegram_token': os.environ.get('TELEGRAM_TOKEN'),
         'telegram_chat_ids': telegram_chat_ids,
         'auto_optimize': True,
