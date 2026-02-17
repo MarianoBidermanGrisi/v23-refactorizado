@@ -3233,7 +3233,7 @@ class TradingBot:
             expectativa = "posible entrada en SHORT"
         
         # Verificar si las alertas de breakout están habilitadas para consola
-        alertas_consola = self.config.get('alertas_breakout_consola', True)
+        alertas_consola = self.config.get('alertas_breakout_consola', False)
         
         # ============================================================
         # LÓGICA: true = console, false = Telegram
@@ -5221,12 +5221,12 @@ def crear_config_desde_entorno():
         # ============================================================
         # NUEVO: Configuración de alertas de breakout en consola
         # ============================================================
-        'alertas_breakout_consola': os.environ.get('ALERTAS_BREAKOUT_CONSOLA', 'false').lower() == 'true',
+        'alertas_breakout_consola': os.environ.get('ALERTAS_BREAKOUT_CONSOLA', 'false').lower() == 'false',
         'telegram_token': os.environ.get('TELEGRAM_TOKEN'),
         'telegram_chat_ids': telegram_chat_ids,
         'auto_optimize': True,
         'min_samples_optimizacion': 15,
-        'reevaluacion_horas': 6,
+        'reevaluacion_horas': 8,
         'log_path': os.path.join(directorio_actual, 'operaciones_log_v23_real.csv'),
         'estado_file': os.path.join(directorio_actual, 'estado_bot_v23_real.json'),
         'bitget_api_key': os.environ.get('BITGET_API_KEY'),
