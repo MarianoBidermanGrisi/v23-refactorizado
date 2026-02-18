@@ -2403,6 +2403,13 @@ class TradingBot:
                 del self.operaciones_activas[simbolo]
                 logger.info(f"   ✅ Eliminado de operaciones_activas")
             
+            # ============================================================
+            # NUEVO: Limpiar cooldown DI cuando se libera símbolo
+            # ============================================================
+            if simbolo in self.cierres_di_recientes:
+                del self.cierres_di_recientes[simbolo]
+                logger.info(f"   🧹 Cooldown DI limpiado para {simbolo}")
+            
             # Eliminar IDs de órdenes SL/TP
             if simbolo in self.order_ids_sl:
                 del self.order_ids_sl[simbolo]
@@ -2703,12 +2710,51 @@ class TradingBot:
                         self.operaciones_bitget_activas[simbolo] = self.operaciones_activas[simbolo].copy()
                 else:
                     # Nueva operación detectada - es manual del usuario
+                    # ============================================================
+                    # NUEVO: Verificar cooldown DI antes de permitir operación manual
+                    # Si el símbolo está en cooldown, advertimos al usuario
+                    # ============================================================
+                    tipo_operacion_manual = 'LONG' if pos_data['hold_side'] == 'long' else 'SHORT'
+                    
+                    # Verificar cooldown
+                    en_cooldown_di, razon_cooldown = self.verificar_cooldown_di(simbolo, tipo_operacion_manual)
+                    
+                    if en_cooldown_di:
+                        # El símbolo está en cooldown por cierre DI - advertimos al usuario
+                        logger.warning(f"⚠️ {simbolo}: OPERACIÓN MANUAL BLOQUEADA POR COOLDOWN DI!")
+                        logger.warning(f"   🛡️ Razón: {razon_cooldown}")
+                        logger.warning(f"   ⚠️ El símbolo fue cerrado automáticamente por señal DI hace menos de {self.cooldown_di_minutos} minutos")
+                        logger.warning(f"   ⚠️ Te recomendamos NO abrir operaciones manuales en el lado opuesto")
+                        
+                        # Enviar advertencia por Telegram si está configurado
+                        try:
+                            token = self.config.get('telegram_token')
+                            chat_ids = self.config.get('telegram_chat_ids', [])
+                            if token and chat_ids:
+                                mensaje_advertencia = f"""
+⚠️ <b>OPERACIÓN MANUAL BLOQUEADA - COOLDOWN DI</b>
+📊 <b>Símbolo:</b> {simbolo}
+📈 <b>Tipo operación:</b> {tipo_operacion_manual}
+🛡️ <b>Razón:</b> {razon_cooldown}
+⚠️ <b>Advertencia:</b> El símbolo fue cerrado automáticamente por señal DI hace menos de {self.cooldown_di_minutos} minutos
+💡 <b>Recomendación:</b> Espera a que expire el cooldown o abre en la MISMA dirección
+⏰ <b>Detectado:</b> {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+                                """
+                                self._enviar_telegram_simple(mensaje_advertencia, token, chat_ids)
+                        except Exception as e:
+                            logger.warning(f"⚠️ Error enviando advertencia Telegram: {e}")
+                        
+                        # NO creamos la entrada de operación manual - el usuario abre bajo su propio riesgo
+                        # pero el bot no la trackeará
+                        logger.info(f"👤 El bot NO trackeará esta operación manual debido al cooldown DI")
+                        continue
+                    
                     logger.info(f"👤 OPERACIÓN MANUAL DETECTADA: {simbolo}")
                     logger.info(f"   🛡️ El bot omitirá señales para este par hasta que cierres la operación")
                     logger.info(f"   📊 Detalles: {pos_data['hold_side'].upper()} | Precio: {pos_data['average_price']:.8f} | Size: {pos_data['position_size']}")
                     
                     # Crear entrada local para esta operación
-                    tipo_operacion = 'LONG' if pos_data['hold_side'] == 'long' else 'SHORT'
+                    tipo_operacion = tipo_operacion_manual
                     self.operaciones_activas[simbolo] = {
                         'tipo': tipo_operacion,
                         'precio_entrada': pos_data['average_price'],
@@ -2976,6 +3022,14 @@ class TradingBot:
                 del self.operaciones_activas[simbolo]
             if simbolo in self.operaciones_bitget_activas:
                 del self.operaciones_bitget_activas[simbolo]
+            
+            # ============================================================
+            # NUEVO: Limpiar cooldown DI cuando se cierra operación
+            # ============================================================
+            if simbolo in self.cierres_di_recientes:
+                del self.cierres_di_recientes[simbolo]
+                logger.info(f"🧹 {simbolo}: Cooldown DI limpiado")
+            
             if simbolo in self.order_ids_entrada:
                 del self.order_ids_entrada[simbolo]
             if simbolo in self.order_ids_sl:
@@ -3233,7 +3287,7 @@ class TradingBot:
             expectativa = "posible entrada en SHORT"
         
         # Verificar si las alertas de breakout están habilitadas para consola
-        alertas_consola = self.config.get('alertas_breakout_consola', True)
+        alertas_consola = self.config.get('alertas_breakout_consola', False)
         
         # ============================================================
         # LÓGICA: true = console, false = Telegram
@@ -3759,7 +3813,9 @@ class TradingBot:
                 # ============================================================
                 # Verificar si el símbolo está en cooldown por cierre DI
                 # Esto previene abrir operaciones en el lado opuesto después de un cierre DI
+                logger.info(f"🔍 {simbolo}: Verificando cooldown DI antes de generar señal. tipo_operacion={tipo_operacion}")
                 en_cooldown, razon_cooldown = self.verificar_cooldown_di(simbolo, tipo_operacion)
+                logger.info(f"🔍 {simbolo}: Resultado cooldown - en_cooldown={en_cooldown}, razon={razon_cooldown}")
                 if en_cooldown:
                     print(f"   🛡️ {simbolo} - {razon_cooldown}")
                     # Eliminar de esperando_reentry para no procesar este símbolo
@@ -4108,6 +4164,15 @@ class TradingBot:
                 self.registrar_operacion(datos_operacion)
                 operaciones_cerradas.append(simbolo)
                 del self.operaciones_activas[simbolo]
+                
+                # ============================================================
+                # NUEVO: Limpiar cooldown DI cuando se cierra operación normalmente
+                # Si la operación se cierra por TP/SL, eliminamos el cooldown
+                # ============================================================
+                if simbolo in self.cierres_di_recientes:
+                    del self.cierres_di_recientes[simbolo]
+                    logger.info(f"🧹 {simbolo}: Cooldown DI limpiado por cierre normal (TP/SL)")
+                
                 if simbolo in self.senales_enviadas:
                     self.senales_enviadas.remove(simbolo)
                 self.operaciones_desde_optimizacion += 1
@@ -4563,38 +4628,38 @@ class TradingBot:
         # Limpiar entradas antiguas del diccionario de cierres DI
         self.limpiar_cierres_di_expirados()
         
+        logger.info(f"🔍 verificar_cooldown_di: Verificando {simbolo}, tipo_propuesta={tipo_operacion_propuesta}")
+        logger.info(f"🔍 verificar_cooldown_di: cierres_di_recientes tiene {len(self.cierres_di_recientes)} entradas")
+        
         # Verificar si el símbolo está en el diccionario de cierres DI recientes
         if simbolo not in self.cierres_di_recientes:
+            logger.info(f"🔍 verificar_cooldown_di: {simbolo} NO está en cierres_di_recientes")
             return False, ""
         
         info_cierre = self.cierres_di_recientes[simbolo]
         tiempo_transcurrido = (datetime.now() - info_cierre['timestamp']).total_seconds() / 60
         
+        logger.info(f"🔍 verificar_cooldown_di: {simbolo} encontrado, tipo_cerrado={info_cierre['tipo']}, tiempo={tiempo_transcurrido:.1f}min, cooldown={self.cooldown_di_minutos}min")
+        
         # Verificar si aún está dentro del período de cooldown
         if tiempo_transcurrido < self.cooldown_di_minutos:
-            # Si se proporciona el tipo de operación, verificar si es opuesta
+            # DURANTE EL COOLDOWN: Bloquear cualquier operación, sin importar la dirección
+            # Esto es más seguro para evitar pérdidas
             if tipo_operacion_propuesta:
                 tipo_cerrado = info_cierre['tipo']
-                if tipo_operacion_propuesta != tipo_cerrado:
-                    # Es una operación en el lado opuesto - COOLDOWN OBLIGATORIO
-                    razon = (f"COOLDOWN DI: Operación {tipo_operacion_propuesta} bloqueada. "
-                            f"El símbolo fue cerrado como {tipo_cerrado} hace {tiempo_transcurrido:.1f} minutos. "
-                            f"Cooldown: {self.cooldown_di_minutos} minutos.")
-                    logger.warning(f"🛡️ {simbolo}: {razon}")
-                    return True, razon
-                else:
-                    # Es la misma dirección - permitir con advertencia
-                    razon = (f"Advertencia: El símbolo fue cerrado como {tipo_cerrado} hace "
-                            f"{tiempo_transcurrido:.1f} minutos. Cooldown: {self.cooldown_di_minutos} minutos.")
-                    logger.info(f"⚠️ {simbolo}: {razon}")
-                    return False, razon
+                # Bloquear SIEMPRE durante el cooldown, sin importar si es misma o inversa dirección
+                # La dirección solo importa después del cooldown
+                razon = (f"COOLDOWN DI: Operación {tipo_operacion_propuesta} bloqueada. "
+                        f"El símbolo fue cerrado como {tipo_cerrado} hace {tiempo_transcurrido:.1f} minutos. "
+                        f"Cooldown: {self.cooldown_di_minutos} minutos.")
+                logger.warning(f"🛡️ {simbolo}: {razon}")
+                return True, razon
             else:
-                # No se especificó tipo - solo verificar tiempo
-                if tiempo_transcurrido < self.cooldown_di_minutos:
-                    razon = (f"COOLDOWN DI: El símbolo fue cerrado hace {tiempo_transcurrido:.1f} minutos. "
-                            f"Cooldown: {self.cooldown_di_minutos} minutos.")
-                    logger.warning(f"🛡️ {simbolo}: {razon}")
-                    return True, razon
+                # No se especificó tipo - bloquear por tiempo
+                razon = (f"COOLDOWN DI: El símbolo fue cerrado hace {tiempo_transcurrido:.1f} minutos. "
+                        f"Cooldown: {self.cooldown_di_minutos} minutos.")
+                logger.warning(f"🛡️ {simbolo}: {razon}")
+                return True, razon
         
         # El cooldown ha expirado - limpiar entrada
         del self.cierres_di_recientes[simbolo]
@@ -4796,6 +4861,13 @@ class TradingBot:
                     
                     # Eliminar de operativas activas
                     del self.operaciones_activas[simbolo]
+                    
+                    # ============================================================
+                    # NUEVO: Eliminar de esperando_reentry cuando se cierra por DI
+                    # ============================================================
+                    if simbolo in self.esperando_reentry:
+                        del self.esperando_reentry[simbolo]
+                        logger.info(f"🧹 {simbolo}: Eliminado de esperando_reentry por cierre DI")
                     
                     if simbolo in self.senales_enviadas:
                         self.senales_enviadas.remove(simbolo)
