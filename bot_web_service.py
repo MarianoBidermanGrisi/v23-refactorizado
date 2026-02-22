@@ -1588,38 +1588,53 @@ def ejecutar_operacion_bitget(bitget_client, simbolo, tipo_operacion, capital_us
         max_margin_porcentaje = 0.05  # Máximo 5% del saldo
         max_margin_permitido = saldo_cuenta * max_margin_porcentaje
         
-        if margin_real > max_margin_permitido:
-            logger.warning(f"⚠️ MARGIN USDT real (${margin_real:.2f}) excede el {max_margin_porcentaje*100}% máximo permitido (${max_margin_permitido:.2f})")
-            logger.warning(f"📊 Esto ocurre porque el tamaño mínimo del símbolo es muy grande")
-            logger.warning(f"📊 Intentando reducir el tamaño...")
+        # Iterar hasta que el margin cumpla con el límite o llegue al mínimo absoluto
+        iteraciones_maximas = 10
+        for iteracion in range(iteraciones_maximas):
+            if margin_real <= max_margin_permitido:
+                # El margin cumple con el límite - continuar
+                break
+            
+            logger.warning(f"⚠️ Iteración {iteracion+1}: MARGIN USDT real (${margin_real:.2f}) excede el {max_margin_porcentaje*100}% máximo permitido (${max_margin_permitido:.2f})")
             
             # Calcular el tamaño máximo que cumpla con el 5% máximo
             max_valor_nocional = max_margin_permitido * leverage
             cantidad_maxima = max_valor_nocional / precio_actual
             
-            # Ajustar a las reglas del símbolo
-            cantidad_maxima = bitget_client.ajustar_tamaño_orden(simbolo, cantidad_maxima, reglas)
+            # NO ajustar a las reglas del símbolo esta vez - usar el valor exacto
+            # Esto evita que el tamaño mínimo del símbolo bloquee la reducción
+            cantidad_contratos = cantidad_maxima
             
-            # Recalcular margin con la cantidad reducida
-            valor_nocional_reducido = cantidad_maxima * precio_actual
-            margin_reducido = valor_nocional_reducido / leverage
+            # Calcular el nuevo margin
+            valor_nocional_real = cantidad_contratos * precio_actual
+            margin_real = valor_nocional_real / leverage
             
-            # Verificar si la reducción ayuda
-            if margin_reducido <= max_margin_permitido:
-                cantidad_contratos = cantidad_maxima
-                valor_nocional_real = valor_nocional_reducido
-                margin_real = margin_reducido
-                
-                logger.info(f"📊 Cantidad reducida para cumplir límite: {cantidad_contratos} contratos")
-                logger.info(f"📊 Valor nocional ajustado: ${valor_nocional_real:.2f}")
-                logger.info(f"📊 MARGIN USDT ajustado: ${margin_real:.2f} ({margin_real/saldo_cuenta*100:.1f}% del saldo)")
-            else:
-                # Incluso el tamaño mínimo excede el 5% - NO OPERAR
-                logger.error(f"❌ IMPOSIBLE OPERAR: El tamaño mínimo del símbolo requiere ${margin_reducido:.2f} de margin")
-                logger.error(f"📊 Esto representa el {margin_reducido/saldo_cuenta*100:.1f}% del saldo (límite: {max_margin_porcentaje*100}%)")
+            logger.warning(f"📊 Reducido a: {cantidad_contratos} contratos, margin: ${margin_real:.2f}")
+            
+            # Si ya cumple, salir del loop
+            if margin_real <= max_margin_permitido:
+                logger.info(f"📊 Margin reducido exitosamente: ${margin_real:.2f} ({margin_real/saldo_cuenta*100:.1f}% del saldo)")
+                break
+        else:
+            # Si salimos del loop por iteraciones máximas sin cumplir el límite
+            # Intentar una última vez con el tamaño mínimo posible
+            cantidad_minima_absoluta = reglas['min_trade_num']
+            valor_nocional_minimo = cantidad_minima_absoluta * precio_actual
+            margin_minimo = valor_nocional_minimo / leverage
+            
+            if margin_minimo > max_margin_permitido:
+                # Incluso el mínimo excede el 5% - NO OPERAR
+                logger.error(f"❌ IMPOSIBLE OPERAR: El tamaño mínimo del símbolo requiere ${margin_minimo:.2f} de margin")
+                logger.error(f"📊 Esto representa el {margin_minimo/saldo_cuenta*100:.1f}% del saldo (límite: {max_margin_porcentaje*100}%)")
                 logger.error(f"📊 Precio: ${precio_actual:.8f} | Mínimo: {reglas['min_trade_num']} contratos")
                 logger.error(f"💡 Recomendación: Usar un símbolo con precio más bajo o esperar a tener más saldo")
                 return None
+            else:
+                # Usar el mínimo
+                cantidad_contratos = cantidad_minima_absoluta
+                valor_nocional_real = valor_nocional_minimo
+                margin_real = margin_minimo
+                logger.warning(f"📊 Usando tamaño mínimo: {cantidad_contratos} contratos, margin: ${margin_real:.2f}")
         
         # VERIFICACIÓN ANTIGUA (por compatibilidad): El MARGIN USDT real no debe exceder el saldo disponible
         # Esta verificación es redundante ahora pero se mantiene por seguridad
@@ -3759,6 +3774,37 @@ class TradingBot:
                 # Basado en la dirección de la tendencia
                 # Obtener datos preliminares para determinar tipo de operación
                 config_optima_check = self.buscar_configuracion_optima_simbolo(simbolo)
+                
+                # ============================================================
+                # VERIFICACIÓN DE COOLDOWN DI - ALWAYS RUN (FUERA DEL CONDICIONAL)
+                # Esta verificación es CRÍTICA y debe ejecutarse SIEMPRE
+                # No importa siconfig_optima_check existe o no
+                # ============================================================
+                # Hacer una verificación inicial sin conocer el tipo de operación
+                # Esto bloqueará cualquier operación si hay cooldown activo
+                en_cooldown_inicial, _ = self.verificar_cooldown_di(simbolo)
+                if en_cooldown_inicial:
+                    # Obtener información para determinar qué tipo sería
+                    if config_optima_check:
+                        datos_temp = self.obtener_datos_mercado_config(
+                            simbolo, config_optima_check['timeframe'], config_optima_check['num_velas']
+                        )
+                        if datos_temp:
+                            info_temp = self.calcular_canal_regresion_config(
+                                datos_temp, config_optima_check['num_velas']
+                            )
+                            if info_temp:
+                                tipo_op = 'LONG' if info_temp.get('direccion') == 'ALCISTA' else 'SHORT'
+                                en_cooldown_real, razon_real = self.verificar_cooldown_di(simbolo, tipo_op)
+                                if en_cooldown_real:
+                                    print(f"   🛡️ {simbolo} - COOLDOWN DI ACTIVO ({razon_real[:50]}...)")
+                                    print(f"   ⚠️ Omitiendo análisis para evitar operación en lado contrario")
+                                    continue
+                    # Si no se puede determinar el tipo pero hay cooldown, bloquear
+                    print(f"   🛡️ {simbolo} - COOLDOWN DI ACTIVO (tipo no determinado)")
+                    print(f"   ⚠️ Omitiendo análisis")
+                    continue
+                
                 if config_optima_check:
                     datos_preliminares = self.obtener_datos_mercado_config(
                         simbolo, config_optima_check['timeframe'], config_optima_check['num_velas']
@@ -3942,6 +3988,13 @@ class TradingBot:
         if simbolo in self.senales_enviadas:
             print(f"    ⏳ {simbolo} - Señal ya procesada anteriormente, omitiendo...")
             return
+        
+        # ============================================================
+        # PROTECCIÓN ADICIONAL: Agregar símbolo ANTES de procesar
+        # Esto previene operaciones múltiples si hay error durante el procesamiento
+        # ============================================================
+        self.senales_enviadas.add(simbolo)
+        
         if precio_entrada is None or tp is None or sl is None:
             print(f"    ❌ Niveles inválidos para {simbolo}, omitiendo señal")
             return
@@ -3998,6 +4051,25 @@ class TradingBot:
         
         # Ejecutar operación automáticamente si está habilitado y tenemos cliente BITGET FUTUROS
         operacion_bitget = None  # Definir variable antes del try
+        
+        # ============================================================
+        # VERIFICACIÓN FINAL DE COOLDOWN DI - ÚLTIMA LÍNEA DE DEFENSA
+        # Esta verificación es CRÍTICA y se ejecuta justo antes de abrir la operación
+        # No importa qué haya pasado antes - aquí verificamos por última vez
+        # ============================================================
+        en_cooldown_final, razon_final = self.verificar_cooldown_di(simbolo, tipo_operacion)
+        if en_cooldown_final:
+            print(f"     🛡️ {simbolo} - COOLDOWN DI BLOQUEA OPERACIÓN FINAL")
+            print(f"     ⚠️ {razon_final}")
+            print(f"     ❌ Operación NO ejecutada - cooldown DI activo")
+            # NO agregar a senales_enviadas ya que no se procesó
+            # Eliminar si ya fue agregado
+            self.senales_enviadas.discard(simbolo)
+            # Eliminar de esperando_reentry si está ahí
+            if simbolo in self.esperando_reentry:
+                del self.esperando_reentry[simbolo]
+            return
+        
         if self.ejecutar_operaciones_automaticas and self.bitget_client:
             print(f"     🤖 Ejecutando operación automática en BITGET FUTUROS...")
             try:
