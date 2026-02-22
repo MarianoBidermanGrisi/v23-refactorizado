@@ -2701,36 +2701,116 @@ class TradingBot:
                         })
                         self.operaciones_bitget_activas[simbolo] = self.operaciones_activas[simbolo].copy()
                 else:
-                    # Nueva operación detectada - es manual del usuario
-                    logger.info(f"👤 OPERACIÓN MANUAL DETECTADA: {simbolo}")
-                    logger.info(f"   🛡️ El bot NO creará seguimiento automático para esta operación")
-                    logger.info(f"   📊 Detalles: {pos_data['hold_side'].upper()} | Precio: {pos_data['average_price']:.8f} | Size: {pos_data['position_size']}")
-                    logger.info(f"   ⚠️ IMPORTANTE: Esta operación NO será rastreada por el bot")
-                    logger.info(f"   💡 Solo se rastrearán operaciones abertas mediante la lógica de trading (breakout + reentry)")
+                    # ============================================================
+                    # CRÍTICO: NUEVA OPERACIÓN DETECTADA - VERIFICAR SI ES LEGÍTIMA
+                    # ============================================================
+                    # SOLO rastrear operaciones que fueron abiertas por la lógica de trading del bot
+                    # NO importar automáticamente posiciones del exchange
+                    #
+                    # Regla de Oro: Solo la lógica de trading (breakout + reentry) puede abrir operaciones
+                    #
+                    # IMPORTANTE: Verificar cooldown DI para evitar operaciones en lado contrario
+                    tipo_operacion_detectada = 'LONG' if pos_data['hold_side'] == 'long' else 'SHORT'
                     
-                    # CORRECCIÓN: NO crear entrada local para operaciones manuales
-                    # El bot debe ser SOLO de lectura respecto a operaciones no generadas por su lógica
-                    # Esto enforce la "regla de oro": solo se abren operaciones mediante breakout + reentry
+                    # Verificar si el símbolo está en cooldown DI (operación reciente cerrada por DI)
+                    esta_en_cooldown_di, razon_cooldown = self.verificar_cooldown_di(simbolo, tipo_operacion_detectada)
                     
-                    # Enviar notificación al usuario si hay Telegram configurado
-                    tipo_operacion = 'LONG' if pos_data['hold_side'] == 'long' else 'SHORT'
+                    if esta_en_cooldown_di:
+                        # El símbolo está en cooldown DI - registrar pero NO crear seguimiento
+                        logger.warning(f"🛡️ {simbolo}: OPERACIÓN DESCARTADA - Cooldown DI activo")
+                        logger.warning(f"   📊 Tipo detectada: {tipo_operacion_detectada}")
+                        logger.warning(f"   📊 Razón: {razon_cooldown}")
+                        logger.warning(f"   ⚠️ El bot NO rastreará ni adoptará esta posición")
+                        
+                        # Enviar notificación de alerta
+                        try:
+                            token = self.config.get('telegram_token')
+                            chat_ids = self.config.get('telegram_chat_ids', [])
+                            if token and chat_ids:
+                                mensaje_alerta = f"""
+🛡️ <b>ALERTA: OPERACIÓN DESCARTADA POR COOLDOWN DI</b>
+
+📊 <b>Símbolo:</b> {simbolo}
+📈 <b>Tipo detectada:</b> {tipo_operacion_detectada}
+⚠️ <b>Razón:</b> {razon_cooldown}
+
+⏰ <b>Detectado:</b> {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+
+<i>El bot NO abrirá ni rastreará operaciones hasta que pase el cooldown DI.</i>
+                                """
+                                self._enviar_telegram_simple(mensaje_alerta, token, chat_ids)
+                        except Exception as e:
+                            logger.warning(f"⚠️ Error enviando notificación: {e}")
+                        
+                        # NO crear seguimiento - continuar con el siguiente símbolo
+                        continue
+                    
+                    # Verificar si el símbolo está siendo procesado por breakout activo o esperando reentry
+                    # NO importar posiciones que no fueron abiertas por el bot
+                    esta_en_breakout = hasattr(self, 'breakouts_activos') and simbolo in self.breakouts_activos
+                    esta_en_reentry = simbolo in self.esperando_reentry
+                    
+                    if esta_en_breakout or esta_en_reentry:
+                        # El símbolo tiene un breakout o reentry activo - podría ser una posición legítima
+                        # Pero esto NO debería pasar si la operación fue registrada correctamente
+                        logger.warning(f"⚠️ {simbolo}: Posición detectada pero el símbolo ya tiene breakout/reentry activo")
+                        logger.warning(f"   📊 Esto indica una inconsistencia - NO se creará seguimiento automático")
+                        
+                        # Enviar notificación de alerta
+                        try:
+                            token = self.config.get('telegram_token')
+                            chat_ids = self.config.get('telegram_chat_ids', [])
+                            if token and chat_ids:
+                                mensaje_alerta = f"""
+⚠️ <b>ALERTA: INCONSISTENCIA DETECTADA</b>
+
+📊 <b>Símbolo:</b> {simbolo}
+📈 <b>Tipo detectada:</b> {tipo_operacion_detectada}
+⚠️ <b>Razón:</b> El símbolo ya tiene breakout/reentry activo
+
+<i>El bot NO creará seguimiento para evitar duplicados.</i>
+⏰ <b>Detectado:</b> {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+                                """
+                                self._enviar_telegram_simple(mensaje_alerta, token, chat_ids)
+                        except Exception as e:
+                            logger.warning(f"⚠️ Error enviando notificación: {e}")
+                        
+                        # NO crear seguimiento - continuar
+                        continue
+                    
+                    # ============================================================
+                    # CASO: Posición en exchange que NO fue abierta por el bot
+                    # El bot debe IGNORAR completamente esta posición
+                    # NO crear seguimiento, NO adoptar, NO hacer nada
+                    # ============================================================
+                    logger.warning(f"🚫 {simbolo}: POSICIÓN EXTERNA DETECTADA - IGNORADA")
+                    logger.warning(f"   📊 Tipo: {tipo_operacion_detectada} | Precio: {pos_data['average_price']:.8f} | Size: {pos_data['position_size']}")
+                    logger.warning(f"   🛡️ REGLA DE ORO: Solo se rastrean operaciones abiertas mediante breakout + reentry")
+                    logger.warning(f"   ⚠️ Esta posición fue abierta FUERA del sistema de trading del bot")
+                    logger.warning(f"   ❌ El bot NO la adoptará ni rastreará")
+                    
+                    # Enviar notificación al usuario
                     try:
                         token = self.config.get('telegram_token')
                         chat_ids = self.config.get('telegram_chat_ids', [])
                         if token and chat_ids:
-                            mensaje_manual = f"""
-👤 <b>OPERACIÓN MANUAL DETECTADA</b>
+                            mensaje_externo = f"""
+🚫 <b>POSICIÓN EXTERNA DETECTADA - IGNORADA</b>
+
 📊 <b>Símbolo:</b> {simbolo}
-📈 <b>Tipo:</b> {tipo_operacion}
+📈 <b>Tipo:</b> {tipo_operacion_detectada}
 💰 <b>Precio entrada:</b> {pos_data['average_price']:.8f}
 📏 <b>Size:</b> {pos_data['position_size']}
 💵 <b>Valor nocional:</b> ${pos_data['position_usdt']:.2f}
-🛡️ <b>Nota:</b> El bot NO rastreará esta operación手动
+
+🛡️ <b>El bot IGNORARÁ esta posición</b>
+<i>Solo se rastrean operaciones abertas mediante la lógica de trading (breakout + reentry)</i>
+
 ⏰ <b>Detectado:</b> {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
                             """
-                            self._enviar_telegram_simple(mensaje_manual, token, chat_ids)
+                            self._enviar_telegram_simple(mensaje_externo, token, chat_ids)
                     except Exception as e:
-                        logger.warning(f"⚠️ Error enviando notificación Telegram: {e}")
+                        logger.warning(f"⚠️ Error enviando notificación: {e}")
             
             self.ultima_sincronizacion_bitget = datetime.now()
             logger.info(f"✅ Sincronización con Bitget completada")
@@ -3647,6 +3727,35 @@ class TradingBot:
                     else:
                         print(f"   ⚡ {simbolo} - Operación automática activa, omitiendo...")
                     continue
+                
+                # ============================================================
+                # VERIFICACIÓN DE COOLDOWN DI ANTES DE PROCESAR SEÑAL
+                # Esta verificación es CRÍTICA para evitar operaciones en el lado contrario
+                # después de un cierre por señal DI
+                # ============================================================
+                # Determinar qué tipo de operación se está evaluando (LONG o SHORT)
+                # Basado en la dirección de la tendencia
+                # Obtener datos preliminares para determinar tipo de operación
+                config_optima_check = self.buscar_configuracion_optima_simbolo(simbolo)
+                if config_optima_check:
+                    datos_preliminares = self.obtener_datos_mercado_config(
+                        simbolo, config_optima_check['timeframe'], config_optima_check['num_velas']
+                    )
+                    if datos_preliminares:
+                        info_canal_preliminar = self.calcular_canal_regresion_config(
+                            datos_preliminares, config_optima_check['num_velas']
+                        )
+                        if info_canal_preliminar:
+                            tipo_operacion_propuesta = 'LONG' if info_canal_preliminar.get('direccion') == 'ALCISTA' else 'SHORT'
+                            
+                            # Verificar cooldown DI para este tipo de operación propuesta
+                            esta_en_cooldown, razon_cooldown = self.verificar_cooldown_di(simbolo, tipo_operacion_propuesta)
+                            
+                            if esta_en_cooldown:
+                                print(f"   🛡️ {simbolo} - COOLDOWN DI ACTIVO ({razon_cooldown[:50]}...)")
+                                print(f"   ⚠️ Omitiendo análisis para evitar operación en lado contrario")
+                                continue
+                
                 config_optima = self.buscar_configuracion_optima_simbolo(simbolo)
                 if not config_optima:
                     print(f"   ❌ {simbolo} - No se encontró configuración válida")
