@@ -1580,32 +1580,54 @@ def ejecutar_operacion_bitget(bitget_client, simbolo, tipo_operacion, capital_us
         logger.info(f"📊 Min trade num: {reglas['min_trade_num']}")
         logger.info(f"📊 Size multiplier: {reglas['size_multiplier']}")
         
-        # VERIFICACIÓN CRÍTICA: El MARGIN USDT real no debe exceder el saldo disponible
-        max_margin_permitido = saldo_cuenta * 0.95  # Dejar siempre 5% de reserva
+        # ============================================================
+        # VERIFICACIÓN CRÍTICA: El MARGIN debe ser máximo 5% del saldo
+        # 即使Después del ajuste, el margin no debe exceder el 5% máximo
+        # Esto previene operaciones con más del 50% del capital
+        # ============================================================
+        max_margin_porcentaje = 0.05  # Máximo 5% del saldo
+        max_margin_permitido = saldo_cuenta * max_margin_porcentaje
+        
         if margin_real > max_margin_permitido:
-            logger.warning(f"⚠️ MARGIN USDT real (${margin_real:.2f}) excede el máximo permitido (${max_margin_permitido:.2f})")
-            logger.warning(f"📊 Calculando tamaño máximo permitido según saldo disponible...")
+            logger.warning(f"⚠️ MARGIN USDT real (${margin_real:.2f}) excede el {max_margin_porcentaje*100}% máximo permitido (${max_margin_permitido:.2f})")
+            logger.warning(f"📊 Esto ocurre porque el tamaño mínimo del símbolo es muy grande")
+            logger.warning(f"📊 Intentando reducir el tamaño...")
             
-            # Calcular el tamaño máximo basado en el saldo disponible
+            # Calcular el tamaño máximo que cumpla con el 5% máximo
             max_valor_nocional = max_margin_permitido * leverage
             cantidad_maxima = max_valor_nocional / precio_actual
             
             # Ajustar a las reglas del símbolo
             cantidad_maxima = bitget_client.ajustar_tamaño_orden(simbolo, cantidad_maxima, reglas)
             
-            # Verificar que no sea mayor que la cantidad original
-            if cantidad_maxima < cantidad_contratos:
+            # Recalcular margin con la cantidad reducida
+            valor_nocional_reducido = cantidad_maxima * precio_actual
+            margin_reducido = valor_nocional_reducido / leverage
+            
+            # Verificar si la reducción ayuda
+            if margin_reducido <= max_margin_permitido:
                 cantidad_contratos = cantidad_maxima
-                valor_nocional_real = cantidad_contratos * precio_actual
-                margin_real = valor_nocional_real / leverage
+                valor_nocional_real = valor_nocional_reducido
+                margin_real = margin_reducido
                 
-                logger.info(f"📊 Cantidad reducida al máximo permitido: {cantidad_contratos} contratos")
+                logger.info(f"📊 Cantidad reducida para cumplir límite: {cantidad_contratos} contratos")
                 logger.info(f"📊 Valor nocional ajustado: ${valor_nocional_real:.2f}")
-                logger.info(f"📊 MARGIN USDT ajustado: ${margin_real:.2f}")
+                logger.info(f"📊 MARGIN USDT ajustado: ${margin_real:.2f} ({margin_real/saldo_cuenta*100:.1f}% del saldo)")
             else:
-                logger.warning(f"⚠️ Incluso el tamaño máximo ({cantidad_contratos}) excede el saldo disponible")
-                logger.error(f"❌ No se puede ejecutar la operación: margen requerido (${margin_real:.2f}) > saldo disponible (${max_margin_permitido:.2f})")
+                # Incluso el tamaño mínimo excede el 5% - NO OPERAR
+                logger.error(f"❌ IMPOSIBLE OPERAR: El tamaño mínimo del símbolo requiere ${margin_reducido:.2f} de margin")
+                logger.error(f"📊 Esto representa el {margin_reducido/saldo_cuenta*100:.1f}% del saldo (límite: {max_margin_porcentaje*100}%)")
+                logger.error(f"📊 Precio: ${precio_actual:.8f} | Mínimo: {reglas['min_trade_num']} contratos")
+                logger.error(f"💡 Recomendación: Usar un símbolo con precio más bajo o esperar a tener más saldo")
                 return None
+        
+        # VERIFICACIÓN ANTIGUA (por compatibilidad): El MARGIN USDT real no debe exceder el saldo disponible
+        # Esta verificación es redundante ahora pero se mantiene por seguridad
+        max_margin_total = saldo_cuenta * 0.95  # Dejar siempre 5% de reserva
+        if margin_real > max_margin_total:
+            logger.warning(f"⚠️ MARGIN USDT real (${margin_real:.2f}) excede el 95% del saldo (${max_margin_total:.2f})")
+            logger.error(f"❌ No se puede ejecutar la operación: margen requerido (${margin_real:.2f}) > saldo disponible (${max_margin_total:.2f})")
+            return None
         
         # VERIFICACIÓN FINAL: Verificar que la orden pueda ejecutarse con el saldo disponible
         if margin_real > saldo_cuenta * 0.9:  # Si requiere más del 90% del saldo
