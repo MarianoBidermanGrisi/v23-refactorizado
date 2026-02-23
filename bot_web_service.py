@@ -454,7 +454,7 @@ SIMBOLOS_OMITIDOS = {
     # futuros perpetuos con sufijos especiales (ya no disponibles o renombrados)
     'DOGEUSDTS', 'XRPUSDTS',
     # tokens muy illiquidos o delistados
-    'SRMUSDT', 'FTTUSDT', 'FTMUSDT', 'CELRUSDT',
+    'SRMUSDT', 'FTTUSDT', 'FTMUSDT', 'CELRUSDT','BTCUSDT','ETHUSDT','HYPEUSDT','ETCUSDT','LTCUSDT','ADAUSDT',
     # pares con bajo volumen histórico
     'KSMUSDT', 'DOTUSDT', 'NEARUSDT',
     # repetir para asegurar
@@ -1494,8 +1494,7 @@ class BitgetClient:
         """Obtener velas (datos de mercado) de BITGET FUTUROS"""
         try:
             interval_map = {
-                '15m': '15m', '30m': '30m', '1h': '1H',
-                '4h': '4H'
+                '15m': '15m', '30m': '30m', '1h': '1H'
             }
             bitget_interval = interval_map.get(interval)
             if bitget_interval is None:
@@ -2364,7 +2363,7 @@ class TradingBot:
             self.moned = sorted(filtrados, key=get_quote_volume, reverse=True)[:200]
             self.ultima_actualizacion_moned = datetime.now()
 
-            print(f"[SISTEMA] ✅ 100 Monedas actualizadas dinámicamente (Top Volumen)")
+            print(f"[SISTEMA] ✅ 200 Monedas actualizadas dinámicamente (Top Volumen)")
             print(f"   📊 Total símbolos procesados: {len(filtrados)}")
             print(f"   🚫 Símbolos omitidos: {len(SIMBOLOS_OMITIDOS)}")
             print(f"   💱 Monedas seleccionadas: {len(self.moned)}")
@@ -3072,11 +3071,11 @@ class TradingBot:
             else:
                 print(f"   🔄 Reevaluando configuración para {simbolo} (pasó 2 horas)")
         print(f"   🔍 Buscando configuración óptima para {simbolo}...")
-        timeframes = self.config.get('timeframes', ['15m', '30m', '1h', '4h'])
+        timeframes = self.config.get('timeframes', ['15m', '30m', '1h'])
         velas_options = self.config.get('velas_options', [80, 100, 120, 150, 200])
         mejor_config = None
         mejor_puntaje = -999999
-        prioridad_timeframe = {'15m': 4, '30m': 3, '1h': 2, '4h': 1}
+        prioridad_timeframe = {'15m': 4, '30m': 2, '1h': 1}
         for timeframe in timeframes:
             for num_velas in velas_options:
                 try:
@@ -5311,7 +5310,7 @@ def crear_config_desde_entorno():
         'entry_margin': 0.001,
         'min_rr_ratio': 1.2,
         'scan_interval_minutes': 5,  
-        'timeframes': ['15m', '30m', '1h', '4h'],
+        'timeframes': ['15m', '30m', '1h'],
         'velas_options': [80, 100, 120, 150, 200],
         # Símbolos vacíos - Se generarán dinámicamente en actualizar_moned()
         'symbols': [],
