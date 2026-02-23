@@ -30,6 +30,76 @@ logging.basicConfig(level=logging.INFO, stream=sys.stdout, format='%(asctime)s -
 logger = logging.getLogger(__name__)
 
 
+# ============================================================
+# GATEKEEPER - VALIDADOR CENTRALIZADO DE LÓGICA DE TRADING
+# ============================================================
+# Esta función garantiza que SOLO la lógica de breakout + reentry
+# puede abrir operaciones en el exchange
+
+def validar_logicatrading_gatekeeper(bot_instance, simbolo, tipo_operacion, breakpoint_info=None):
+    """
+    GATEKEEPER CRÍTICO: Valida que la operación pase por la lógica correcta de trading.
+    
+    Esta es la ÚNICA función que puede permitir la apertura de operaciones.
+    Cualquier código que intente abrir operaciones DEBE pasar por aquí.
+    
+    Returns:
+        tuple: (bool, str) - (permitido, razon)
+    """
+    try:
+        # Verificar 1: El símbolo DEBE estar en esperando_reentry
+        if simbolo not in bot_instance.esperando_reentry:
+            razon = f"BLOQUEO: {simbolo} NO está en esperando_reentry. No se puede abrir operación sin breakout + reentry previo."
+            logger.warning(f"🛡️ GATEKEEPER: {razon}")
+            return False, razon
+        
+        # Verificar 2: Debe haber información del breakout
+        reentry_info = bot_instance.esperando_reentry[simbolo]
+        tipo_breakout = reentry_info.get('tipo')
+        
+        if not tipo_breakout:
+            razon = f"BLOQUEO: {simbolo} no tiene tipo de breakout registrado."
+            logger.warning(f"🛡️ GATEKEEPER: {razon}")
+            return False, razon
+        
+        # Verificar 3: El tipo de operación debe coincidir con el tipo de breakout
+        if tipo_operacion == "LONG" and tipo_breakout != "BREAKOUT_LONG":
+            razon = f"BLOQUEO: Operación LONG pero breakout era {tipo_breakout}."
+            logger.warning(f"🛡️ GATEKEEPER: {razon}")
+            return False, razon
+        
+        if tipo_operacion == "SHORT" and tipo_breakout != "BREAKOUT_SHORT":
+            razon = f"BLOQUEO: Operación SHORT pero breakout era {tipo_breakout}."
+            logger.warning(f"🛡️ GATEKEEPER: {razon}")
+            return False, razon
+        
+        # Verificar 4: Verificar que el precio esté dentro del canal (reentry válido)
+        tiempo_desde_breakout = (datetime.now() - reentry_info['timestamp']).total_seconds() / 60
+        if tiempo_desde_breakout > 120:
+            razon = f"BLOQUEO: Timeout de reentry ({tiempo_desde_breakout:.1f} min > 120 min)."
+            logger.warning(f"🛡️ GATEKEEPER: {razon}")
+            # Limpiar esperando_reentry
+            if simbolo in bot_instance.esperando_reentry:
+                del bot_instance.esperando_reentry[simbolo]
+            return False, razon
+        
+        # Si breakpoint_info fue proporcionado, verificar que coincida
+        if breakpoint_info is not None:
+            if breakpoint_info.get('tipo') != tipo_breakout:
+                razon = f"BLOQUEO: Información de breakout no coincide."
+                logger.warning(f"🛡️ GATEKEEPER: {razon}")
+                return False, razon
+        
+        # TODAS LAS VERIFICACIONES PASARON - PERMITIR OPERACIÓN
+        razon = f"APROBADO: {simbolo} pasó validaciones GATEKEEPER (Breakout: {tipo_breakout}, Tipo: {tipo_operacion})"
+        logger.info(f"✅ GATEKEEPER: {razon}")
+        return True, razon
+        
+    except Exception as e:
+        logger.error(f"❌ Error en GATEKEEPER: {e}")
+        return False, f"BLOQUEO: Error en validación: {e}"
+
+
 # ---------------------------
 # INDICADORES TÉCNICOS - ADX, DI+, DI-
 # ---------------------------
@@ -384,7 +454,7 @@ SIMBOLOS_OMITIDOS = {
     # futuros perpetuos con sufijos especiales (ya no disponibles o renombrados)
     'DOGEUSDTS', 'XRPUSDTS',
     # tokens muy illiquidos o delistados
-    'SRMUSDT', 'FTTUSDT', 'FTMUSDT', 'CELRUSDT','BTCUSDT','ETHUSDT','ETCUSDT','LTCUSDT','SOLUSDT','ADAUSDT',
+    'SRMUSDT', 'FTTUSDT', 'FTMUSDT', 'CELRUSDT',
     # pares con bajo volumen histórico
     'KSMUSDT', 'DOTUSDT', 'NEARUSDT',
     # repetir para asegurar
@@ -1424,7 +1494,8 @@ class BitgetClient:
         """Obtener velas (datos de mercado) de BITGET FUTUROS"""
         try:
             interval_map = {
-                '15m': '15m', '30m': '30m', '1h': '1H'
+                '15m': '15m', '30m': '30m', '1h': '1H',
+                '4h': '4H'
             }
             bitget_interval = interval_map.get(interval)
             if bitget_interval is None:
@@ -1580,69 +1651,32 @@ def ejecutar_operacion_bitget(bitget_client, simbolo, tipo_operacion, capital_us
         logger.info(f"📊 Min trade num: {reglas['min_trade_num']}")
         logger.info(f"📊 Size multiplier: {reglas['size_multiplier']}")
         
-        # ============================================================
-        # VERIFICACIÓN CRÍTICA: El MARGIN debe ser máximo 5% del saldo
-        # 即使Después del ajuste, el margin no debe exceder el 5% máximo
-        # Esto previene operaciones con más del 50% del capital
-        # ============================================================
-        max_margin_porcentaje = 0.05  # Máximo 5% del saldo
-        max_margin_permitido = saldo_cuenta * max_margin_porcentaje
-        
-        # Iterar hasta que el margin cumpla con el límite o llegue al mínimo absoluto
-        iteraciones_maximas = 10
-        for iteracion in range(iteraciones_maximas):
-            if margin_real <= max_margin_permitido:
-                # El margin cumple con el límite - continuar
-                break
+        # VERIFICACIÓN CRÍTICA: El MARGIN USDT real no debe exceder el saldo disponible
+        max_margin_permitido = saldo_cuenta * 0.95  # Dejar siempre 5% de reserva
+        if margin_real > max_margin_permitido:
+            logger.warning(f"⚠️ MARGIN USDT real (${margin_real:.2f}) excede el máximo permitido (${max_margin_permitido:.2f})")
+            logger.warning(f"📊 Calculando tamaño máximo permitido según saldo disponible...")
             
-            logger.warning(f"⚠️ Iteración {iteracion+1}: MARGIN USDT real (${margin_real:.2f}) excede el {max_margin_porcentaje*100}% máximo permitido (${max_margin_permitido:.2f})")
-            
-            # Calcular el tamaño máximo que cumpla con el 5% máximo
+            # Calcular el tamaño máximo basado en el saldo disponible
             max_valor_nocional = max_margin_permitido * leverage
             cantidad_maxima = max_valor_nocional / precio_actual
             
-            # NO ajustar a las reglas del símbolo esta vez - usar el valor exacto
-            # Esto evita que el tamaño mínimo del símbolo bloquee la reducción
-            cantidad_contratos = cantidad_maxima
+            # Ajustar a las reglas del símbolo
+            cantidad_maxima = bitget_client.ajustar_tamaño_orden(simbolo, cantidad_maxima, reglas)
             
-            # Calcular el nuevo margin
-            valor_nocional_real = cantidad_contratos * precio_actual
-            margin_real = valor_nocional_real / leverage
-            
-            logger.warning(f"📊 Reducido a: {cantidad_contratos} contratos, margin: ${margin_real:.2f}")
-            
-            # Si ya cumple, salir del loop
-            if margin_real <= max_margin_permitido:
-                logger.info(f"📊 Margin reducido exitosamente: ${margin_real:.2f} ({margin_real/saldo_cuenta*100:.1f}% del saldo)")
-                break
-        else:
-            # Si salimos del loop por iteraciones máximas sin cumplir el límite
-            # Intentar una última vez con el tamaño mínimo posible
-            cantidad_minima_absoluta = reglas['min_trade_num']
-            valor_nocional_minimo = cantidad_minima_absoluta * precio_actual
-            margin_minimo = valor_nocional_minimo / leverage
-            
-            if margin_minimo > max_margin_permitido:
-                # Incluso el mínimo excede el 5% - NO OPERAR
-                logger.error(f"❌ IMPOSIBLE OPERAR: El tamaño mínimo del símbolo requiere ${margin_minimo:.2f} de margin")
-                logger.error(f"📊 Esto representa el {margin_minimo/saldo_cuenta*100:.1f}% del saldo (límite: {max_margin_porcentaje*100}%)")
-                logger.error(f"📊 Precio: ${precio_actual:.8f} | Mínimo: {reglas['min_trade_num']} contratos")
-                logger.error(f"💡 Recomendación: Usar un símbolo con precio más bajo o esperar a tener más saldo")
-                return None
+            # Verificar que no sea mayor que la cantidad original
+            if cantidad_maxima < cantidad_contratos:
+                cantidad_contratos = cantidad_maxima
+                valor_nocional_real = cantidad_contratos * precio_actual
+                margin_real = valor_nocional_real / leverage
+                
+                logger.info(f"📊 Cantidad reducida al máximo permitido: {cantidad_contratos} contratos")
+                logger.info(f"📊 Valor nocional ajustado: ${valor_nocional_real:.2f}")
+                logger.info(f"📊 MARGIN USDT ajustado: ${margin_real:.2f}")
             else:
-                # Usar el mínimo
-                cantidad_contratos = cantidad_minima_absoluta
-                valor_nocional_real = valor_nocional_minimo
-                margin_real = margin_minimo
-                logger.warning(f"📊 Usando tamaño mínimo: {cantidad_contratos} contratos, margin: ${margin_real:.2f}")
-        
-        # VERIFICACIÓN ANTIGUA (por compatibilidad): El MARGIN USDT real no debe exceder el saldo disponible
-        # Esta verificación es redundante ahora pero se mantiene por seguridad
-        max_margin_total = saldo_cuenta * 0.95  # Dejar siempre 5% de reserva
-        if margin_real > max_margin_total:
-            logger.warning(f"⚠️ MARGIN USDT real (${margin_real:.2f}) excede el 95% del saldo (${max_margin_total:.2f})")
-            logger.error(f"❌ No se puede ejecutar la operación: margen requerido (${margin_real:.2f}) > saldo disponible (${max_margin_total:.2f})")
-            return None
+                logger.warning(f"⚠️ Incluso el tamaño máximo ({cantidad_contratos}) excede el saldo disponible")
+                logger.error(f"❌ No se puede ejecutar la operación: margen requerido (${margin_real:.2f}) > saldo disponible (${max_margin_permitido:.2f})")
+                return None
         
         # VERIFICACIÓN FINAL: Verificar que la orden pueda ejecutarse con el saldo disponible
         if margin_real > saldo_cuenta * 0.9:  # Si requiere más del 90% del saldo
@@ -2330,7 +2364,7 @@ class TradingBot:
             self.moned = sorted(filtrados, key=get_quote_volume, reverse=True)[:200]
             self.ultima_actualizacion_moned = datetime.now()
 
-            print(f"[SISTEMA] ✅ 200 Monedas actualizadas dinámicamente (Top Volumen)")
+            print(f"[SISTEMA] ✅ 100 Monedas actualizadas dinámicamente (Top Volumen)")
             print(f"   📊 Total símbolos procesados: {len(filtrados)}")
             print(f"   🚫 Símbolos omitidos: {len(SIMBOLOS_OMITIDOS)}")
             print(f"   💱 Monedas seleccionadas: {len(self.moned)}")
@@ -2738,116 +2772,47 @@ class TradingBot:
                         })
                         self.operaciones_bitget_activas[simbolo] = self.operaciones_activas[simbolo].copy()
                 else:
-                    # ============================================================
-                    # CRÍTICO: NUEVA OPERACIÓN DETECTADA - VERIFICAR SI ES LEGÍTIMA
-                    # ============================================================
-                    # SOLO rastrear operaciones que fueron abiertas por la lógica de trading del bot
-                    # NO importar automáticamente posiciones del exchange
-                    #
-                    # Regla de Oro: Solo la lógica de trading (breakout + reentry) puede abrir operaciones
-                    #
-                    # IMPORTANTE: Verificar cooldown DI para evitar operaciones en lado contrario
-                    tipo_operacion_detectada = 'LONG' if pos_data['hold_side'] == 'long' else 'SHORT'
+                    # Nueva operación detectada - es manual del usuario
+                    logger.info(f"👤 OPERACIÓN MANUAL DETECTADA: {simbolo}")
+                    logger.info(f"   🛡️ El bot omitirá señales para este par hasta que cierres la operación")
+                    logger.info(f"   📊 Detalles: {pos_data['hold_side'].upper()} | Precio: {pos_data['average_price']:.8f} | Size: {pos_data['position_size']}")
                     
-                    # Verificar si el símbolo está en cooldown DI (operación reciente cerrada por DI)
-                    esta_en_cooldown_di, razon_cooldown = self.verificar_cooldown_di(simbolo, tipo_operacion_detectada)
+                    # Crear entrada local para esta operación
+                    tipo_operacion = 'LONG' if pos_data['hold_side'] == 'long' else 'SHORT'
+                    self.operaciones_activas[simbolo] = {
+                        'tipo': tipo_operacion,
+                        'precio_entrada': pos_data['average_price'],
+                        'precio_entrada_real': pos_data['average_price'],
+                        'timestamp_entrada': datetime.now().isoformat(),
+                        'operacion_ejecutada': True,
+                        'detected_from_exchange': True,
+                        'operacion_manual_usuario': True,  # Marca explícita de operación manual
+                        'pnl_no_realizado': pos_data['unrealized_pnl'],
+                        'size_real': pos_data['position_size'],
+                        'valor_nocional': pos_data['position_usdt'],
+                        'fuente': 'sincronizacion_bitget'
+                    }
                     
-                    if esta_en_cooldown_di:
-                        # El símbolo está en cooldown DI - registrar pero NO crear seguimiento
-                        logger.warning(f"🛡️ {simbolo}: OPERACIÓN DESCARTADA - Cooldown DI activo")
-                        logger.warning(f"   📊 Tipo detectada: {tipo_operacion_detectada}")
-                        logger.warning(f"   📊 Razón: {razon_cooldown}")
-                        logger.warning(f"   ⚠️ El bot NO rastreará ni adoptará esta posición")
-                        
-                        # Enviar notificación de alerta
-                        try:
-                            token = self.config.get('telegram_token')
-                            chat_ids = self.config.get('telegram_chat_ids', [])
-                            if token and chat_ids:
-                                mensaje_alerta = f"""
-🛡️ <b>ALERTA: OPERACIÓN DESCARTADA POR COOLDOWN DI</b>
-
-📊 <b>Símbolo:</b> {simbolo}
-📈 <b>Tipo detectada:</b> {tipo_operacion_detectada}
-⚠️ <b>Razón:</b> {razon_cooldown}
-
-⏰ <b>Detectado:</b> {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
-
-<i>El bot NO abrirá ni rastreará operaciones hasta que pase el cooldown DI.</i>
-                                """
-                                self._enviar_telegram_simple(mensaje_alerta, token, chat_ids)
-                        except Exception as e:
-                            logger.warning(f"⚠️ Error enviando notificación: {e}")
-                        
-                        # NO crear seguimiento - continuar con el siguiente símbolo
-                        continue
+                    self.operaciones_bitget_activas[simbolo] = self.operaciones_activas[simbolo].copy()
                     
-                    # Verificar si el símbolo está siendo procesado por breakout activo o esperando reentry
-                    # NO importar posiciones que no fueron abiertas por el bot
-                    esta_en_breakout = hasattr(self, 'breakouts_activos') and simbolo in self.breakouts_activos
-                    esta_en_reentry = simbolo in self.esperando_reentry
-                    
-                    if esta_en_breakout or esta_en_reentry:
-                        # El símbolo tiene un breakout o reentry activo - podría ser una posición legítima
-                        # Pero esto NO debería pasar si la operación fue registrada correctamente
-                        logger.warning(f"⚠️ {simbolo}: Posición detectada pero el símbolo ya tiene breakout/reentry activo")
-                        logger.warning(f"   📊 Esto indica una inconsistencia - NO se creará seguimiento automático")
-                        
-                        # Enviar notificación de alerta
-                        try:
-                            token = self.config.get('telegram_token')
-                            chat_ids = self.config.get('telegram_chat_ids', [])
-                            if token and chat_ids:
-                                mensaje_alerta = f"""
-⚠️ <b>ALERTA: INCONSISTENCIA DETECTADA</b>
-
-📊 <b>Símbolo:</b> {simbolo}
-📈 <b>Tipo detectada:</b> {tipo_operacion_detectada}
-⚠️ <b>Razón:</b> El símbolo ya tiene breakout/reentry activo
-
-<i>El bot NO creará seguimiento para evitar duplicados.</i>
-⏰ <b>Detectado:</b> {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
-                                """
-                                self._enviar_telegram_simple(mensaje_alerta, token, chat_ids)
-                        except Exception as e:
-                            logger.warning(f"⚠️ Error enviando notificación: {e}")
-                        
-                        # NO crear seguimiento - continuar
-                        continue
-                    
-                    # ============================================================
-                    # CASO: Posición en exchange que NO fue abierta por el bot
-                    # El bot debe IGNORAR completamente esta posición
-                    # NO crear seguimiento, NO adoptar, NO hacer nada
-                    # ============================================================
-                    logger.warning(f"🚫 {simbolo}: POSICIÓN EXTERNA DETECTADA - IGNORADA")
-                    logger.warning(f"   📊 Tipo: {tipo_operacion_detectada} | Precio: {pos_data['average_price']:.8f} | Size: {pos_data['position_size']}")
-                    logger.warning(f"   🛡️ REGLA DE ORO: Solo se rastrean operaciones abiertas mediante breakout + reentry")
-                    logger.warning(f"   ⚠️ Esta posición fue abierta FUERA del sistema de trading del bot")
-                    logger.warning(f"   ❌ El bot NO la adoptará ni rastreará")
-                    
-                    # Enviar notificación al usuario
+                    # Enviar notificación al usuario si hay Telegram configurado
                     try:
                         token = self.config.get('telegram_token')
                         chat_ids = self.config.get('telegram_chat_ids', [])
                         if token and chat_ids:
-                            mensaje_externo = f"""
-🚫 <b>POSICIÓN EXTERNA DETECTADA - IGNORADA</b>
-
+                            mensaje_manual = f"""
+👤 <b>OPERACIÓN MANUAL DETECTADA</b>
 📊 <b>Símbolo:</b> {simbolo}
-📈 <b>Tipo:</b> {tipo_operacion_detectada}
+📈 <b>Tipo:</b> {tipo_operacion}
 💰 <b>Precio entrada:</b> {pos_data['average_price']:.8f}
 📏 <b>Size:</b> {pos_data['position_size']}
 💵 <b>Valor nocional:</b> ${pos_data['position_usdt']:.2f}
-
-🛡️ <b>El bot IGNORARÁ esta posición</b>
-<i>Solo se rastrean operaciones abertas mediante la lógica de trading (breakout + reentry)</i>
-
+🛡️ <b>Protección activada:</b> El bot omitirá señales para {simbolo}
 ⏰ <b>Detectado:</b> {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
                             """
-                            self._enviar_telegram_simple(mensaje_externo, token, chat_ids)
+                            self._enviar_telegram_simple(mensaje_manual, token, chat_ids)
                     except Exception as e:
-                        logger.warning(f"⚠️ Error enviando notificación: {e}")
+                        logger.warning(f"⚠️ Error enviando notificación Telegram: {e}")
             
             self.ultima_sincronizacion_bitget = datetime.now()
             logger.info(f"✅ Sincronización con Bitget completada")
@@ -3107,11 +3072,11 @@ class TradingBot:
             else:
                 print(f"   🔄 Reevaluando configuración para {simbolo} (pasó 2 horas)")
         print(f"   🔍 Buscando configuración óptima para {simbolo}...")
-        timeframes = self.config.get('timeframes', ['15m', '30m', '1h'])
+        timeframes = self.config.get('timeframes', ['15m', '30m', '1h', '4h'])
         velas_options = self.config.get('velas_options', [80, 100, 120, 150, 200])
         mejor_config = None
         mejor_puntaje = -999999
-        prioridad_timeframe = {'15m': 4, '30m': 2, '1h': 1}
+        prioridad_timeframe = {'15m': 4, '30m': 3, '1h': 2, '4h': 1}
         for timeframe in timeframes:
             for num_velas in velas_options:
                 try:
@@ -3764,66 +3729,6 @@ class TradingBot:
                     else:
                         print(f"   ⚡ {simbolo} - Operación automática activa, omitiendo...")
                     continue
-                
-                # ============================================================
-                # VERIFICACIÓN DE COOLDOWN DI ANTES DE PROCESAR SEÑAL
-                # Esta verificación es CRÍTICA para evitar operaciones en el lado contrario
-                # después de un cierre por señal DI
-                # ============================================================
-                # Determinar qué tipo de operación se está evaluando (LONG o SHORT)
-                # Basado en la dirección de la tendencia
-                # Obtener datos preliminares para determinar tipo de operación
-                config_optima_check = self.buscar_configuracion_optima_simbolo(simbolo)
-                
-                # ============================================================
-                # VERIFICACIÓN DE COOLDOWN DI - ALWAYS RUN (FUERA DEL CONDICIONAL)
-                # Esta verificación es CRÍTICA y debe ejecutarse SIEMPRE
-                # No importa siconfig_optima_check existe o no
-                # ============================================================
-                # Hacer una verificación inicial sin conocer el tipo de operación
-                # Esto bloqueará cualquier operación si hay cooldown activo
-                en_cooldown_inicial, _ = self.verificar_cooldown_di(simbolo)
-                if en_cooldown_inicial:
-                    # Obtener información para determinar qué tipo sería
-                    if config_optima_check:
-                        datos_temp = self.obtener_datos_mercado_config(
-                            simbolo, config_optima_check['timeframe'], config_optima_check['num_velas']
-                        )
-                        if datos_temp:
-                            info_temp = self.calcular_canal_regresion_config(
-                                datos_temp, config_optima_check['num_velas']
-                            )
-                            if info_temp:
-                                tipo_op = 'LONG' if info_temp.get('direccion') == 'ALCISTA' else 'SHORT'
-                                en_cooldown_real, razon_real = self.verificar_cooldown_di(simbolo, tipo_op)
-                                if en_cooldown_real:
-                                    print(f"   🛡️ {simbolo} - COOLDOWN DI ACTIVO ({razon_real[:50]}...)")
-                                    print(f"   ⚠️ Omitiendo análisis para evitar operación en lado contrario")
-                                    continue
-                    # Si no se puede determinar el tipo pero hay cooldown, bloquear
-                    print(f"   🛡️ {simbolo} - COOLDOWN DI ACTIVO (tipo no determinado)")
-                    print(f"   ⚠️ Omitiendo análisis")
-                    continue
-                
-                if config_optima_check:
-                    datos_preliminares = self.obtener_datos_mercado_config(
-                        simbolo, config_optima_check['timeframe'], config_optima_check['num_velas']
-                    )
-                    if datos_preliminares:
-                        info_canal_preliminar = self.calcular_canal_regresion_config(
-                            datos_preliminares, config_optima_check['num_velas']
-                        )
-                        if info_canal_preliminar:
-                            tipo_operacion_propuesta = 'LONG' if info_canal_preliminar.get('direccion') == 'ALCISTA' else 'SHORT'
-                            
-                            # Verificar cooldown DI para este tipo de operación propuesta
-                            esta_en_cooldown, razon_cooldown = self.verificar_cooldown_di(simbolo, tipo_operacion_propuesta)
-                            
-                            if esta_en_cooldown:
-                                print(f"   🛡️ {simbolo} - COOLDOWN DI ACTIVO ({razon_cooldown[:50]}...)")
-                                print(f"   ⚠️ Omitiendo análisis para evitar operación en lado contrario")
-                                continue
-                
                 config_optima = self.buscar_configuracion_optima_simbolo(simbolo)
                 if not config_optima:
                     print(f"   ❌ {simbolo} - No se encontró configuración válida")
@@ -3946,6 +3851,20 @@ class TradingBot:
                     continue
                 
                 breakout_info = self.esperando_reentry[simbolo]
+                
+                # ============================================================
+                # GATEKEEPER: Validar que todo el proceso de trading fue correcto
+                # Esta es la validación FINAL antes de generar la señal
+                # ============================================================
+                permitido, razon = validar_logicatrading_gatekeeper(
+                    self, simbolo, tipo_operacion, breakout_info
+                )
+                
+                if not permitido:
+                    print(f"   🛡️ {simbolo} - {razon}")
+                    continue
+                
+                # Si llegamos aquí, TODO está correcto - generar señal
                 self.generar_senal_operacion(
                     simbolo, tipo_operacion, precio_entrada, tp, sl, 
                     info_canal, datos_mercado, config_optima, breakout_info
@@ -3976,6 +3895,18 @@ class TradingBot:
     def generar_senal_operacion(self, simbolo, tipo_operacion, precio_entrada, tp, sl,
                             info_canal, datos_mercado, config_optima, breakout_info=None):
         """Genera y envía señal de operación con info de breakout"""
+        
+        # ============================================================
+        # PROTECCIÓN CRÍTICA: Verificar que breakout_info no sea None
+        # Esta es la validación más importante - si no hay breakout_info,
+        # la operación fue llamada sin seguir la lógica correcta
+        # ============================================================
+        if breakout_info is None:
+            print(f"    ❌ {simbolo} - ERROR: breakout_info es None. Operación bloqueada por seguridad.")
+            print(f"    ℹ️  La operación solo puede abrirse después de breakout + reentry válidos.")
+            logger.warning(f"🛡️ GATEKEEPER: {simbolo} - Operación bloqueada porque breakout_info es None")
+            return
+        
         # 🛡️ PROTECCIÓN CRÍTICA: No generar señales en pares con operaciones activas
         if simbolo in self.operaciones_activas:
             # Verificar si es operación manual del usuario
@@ -3988,13 +3919,6 @@ class TradingBot:
         if simbolo in self.senales_enviadas:
             print(f"    ⏳ {simbolo} - Señal ya procesada anteriormente, omitiendo...")
             return
-        
-        # ============================================================
-        # PROTECCIÓN ADICIONAL: Agregar símbolo ANTES de procesar
-        # Esto previene operaciones múltiples si hay error durante el procesamiento
-        # ============================================================
-        self.senales_enviadas.add(simbolo)
-        
         if precio_entrada is None or tp is None or sl is None:
             print(f"    ❌ Niveles inválidos para {simbolo}, omitiendo señal")
             return
@@ -4051,39 +3975,33 @@ class TradingBot:
         
         # Ejecutar operación automáticamente si está habilitado y tenemos cliente BITGET FUTUROS
         operacion_bitget = None  # Definir variable antes del try
-        
-        # ============================================================
-        # VERIFICACIÓN FINAL DE COOLDOWN DI - ÚLTIMA LÍNEA DE DEFENSA
-        # Esta verificación es CRÍTICA y se ejecuta justo antes de abrir la operación
-        # No importa qué haya pasado antes - aquí verificamos por última vez
-        # ============================================================
-        en_cooldown_final, razon_final = self.verificar_cooldown_di(simbolo, tipo_operacion)
-        if en_cooldown_final:
-            print(f"     🛡️ {simbolo} - COOLDOWN DI BLOQUEA OPERACIÓN FINAL")
-            print(f"     ⚠️ {razon_final}")
-            print(f"     ❌ Operación NO ejecutada - cooldown DI activo")
-            # NO agregar a senales_enviadas ya que no se procesó
-            # Eliminar si ya fue agregado
-            self.senales_enviadas.discard(simbolo)
-            # Eliminar de esperando_reentry si está ahí
-            if simbolo in self.esperando_reentry:
-                del self.esperando_reentry[simbolo]
-            return
-        
         if self.ejecutar_operaciones_automaticas and self.bitget_client:
             print(f"     🤖 Ejecutando operación automática en BITGET FUTUROS...")
-            try:
-                operacion_bitget = ejecutar_operacion_bitget(
-                    bitget_client=self.bitget_client,
-                    simbolo=simbolo,
-                    tipo_operacion=tipo_operacion,
-                    capital_usd=None,  # SIEMPRE calcular como 3% del saldo dinámicamente
-                    leverage=None  # Usar apalancamiento máximo permitido por Bitget para este símbolo
-                )
-                if operacion_bitget:
-                    print(f"     ✅ Operación ejecutada en BITGET FUTUROS para {simbolo}")
-                    # Enviar confirmación de ejecución
-                    mensaje_confirmacion = f"""
+            
+            # ============================================================
+            # DOBLE VALIDACIÓN: Verificar GATEKEEPER antes de ejecutar en exchange
+            # Esta es la validación FINAL antes de ejecutar operaciones reales
+            # ============================================================
+            permitido, razon = validar_logicatrading_gatekeeper(
+                self, simbolo, tipo_operacion, breakout_info
+            )
+            
+            if not permitido:
+                print(f"     🛡️ {simbolo} - OPERACIÓN BLOQUEADA POR GATEKEEPER: {razon}")
+                logger.warning(f"🛡️ GATEKEEPER: {simbolo} - Operación automática bloqueada: {razon}")
+            else:
+                try:
+                    operacion_bitget = ejecutar_operacion_bitget(
+                        bitget_client=self.bitget_client,
+                        simbolo=simbolo,
+                        tipo_operacion=tipo_operacion,
+                        capital_usd=None,  # SIEMPRE calcular como 3% del saldo dinámicamente
+                        leverage=None  # Usar apalancamiento máximo permitido por Bitget para este símbolo
+                    )
+                    if operacion_bitget:
+                        print(f"     ✅ Operación ejecutada en BITGET FUTUROS para {simbolo}")
+                        # Enviar confirmación de ejecución
+                        mensaje_confirmacion = f"""
 🤖 <b>OPERACIÓN AUTOMÁTICA EJECUTADA - {simbolo}</b>
 ✅ <b>Status:</b> EJECUTADA EN BITGET FUTUROS
 📊 <b>Tipo:</b> {tipo_operacion}
@@ -4098,11 +4016,11 @@ class TradingBot:
 📋 <b>ID Orden:</b> {operacion_bitget.get('orden_entrada', {}).get('orderId', 'N/A')}
 🔧 <b>Sistema:</b> Cada operación usa 3% del saldo actual (saldo disminuye)
 ⏰ <b>Timestamp:</b> {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
-                    """
-                    self._enviar_telegram_simple(mensaje_confirmacion, token, chat_ids)
-                    
-                    # SOLO agregar a operaciones_activas si la ejecución fue exitosa
-                    self.operaciones_activas[simbolo] = {
+                        """
+                        self._enviar_telegram_simple(mensaje_confirmacion, token, chat_ids)
+                        
+                        # SOLO agregar a operaciones_activas si la ejecución fue exitosa
+                        self.operaciones_activas[simbolo] = {
                         'tipo': tipo_operacion,
                         'precio_entrada': precio_entrada,
                         'take_profit': tp,
@@ -4135,14 +4053,9 @@ class TradingBot:
                     
                     # Guardar estado después de ejecutar operación automática exitosa
                     self.guardar_estado()
-                    
-                else:
-                    print(f"     ❌ Error ejecutando operación en BITGET FUTUROS para {simbolo}")
-                    print(f"     ⚠️  Operación NO agregada a operaciones_activas (falló ejecución)")
-                    
-            except Exception as e:
-                print(f"     ⚠️ Error en ejecución automática: {e}")
-                print(f"     ⚠️  Operación NO agregada a operaciones_activas (excepción: {e})")
+                except Exception as e:
+                    print(f"     ⚠️ Error en ejecución automática: {e}")
+                    print(f"     ⚠️  Operación NO agregada a operaciones_activas (excepción: {e})")
         
         # SOLO agregar a operaciones_activas si NO se ejecutó operación automática o si falló
         if not operacion_bitget:
@@ -5398,7 +5311,7 @@ def crear_config_desde_entorno():
         'entry_margin': 0.001,
         'min_rr_ratio': 1.2,
         'scan_interval_minutes': 5,  
-        'timeframes': ['15m', '30m', '1h'],
+        'timeframes': ['15m', '30m', '1h', '4h'],
         'velas_options': [80, 100, 120, 150, 200],
         # Símbolos vacíos - Se generarán dinámicamente en actualizar_moned()
         'symbols': [],
