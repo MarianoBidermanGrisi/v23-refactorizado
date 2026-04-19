@@ -208,35 +208,93 @@ def escanear_mercado():
     btc_bias, btc_motivo = obtener_salud_btc(core, memoria)
     logger.info(f"[BTC-MASTER] Bias Actual: {btc_bias} ({btc_motivo})")
     
+    try:
+        # ----------------------------------------------------------
+        #  NUEVO: MONITOR DE CIERRE TÉCNICO Y VEDA
+        # ----------------------------------------------------------
+        if 'veda' not in memoria:
+            memoria['veda'] = {}
+            
+        now = time.time()
+        
+        posiciones_reales = core.exchange.fetch_positions(params={'productType': 'USDT-FMT'})
+        posiciones_activas_detalles = [p for p in posiciones_reales if float(p.get('contracts', 0)) > 0]
+        
+        for pos in posiciones_activas_detalles:
+            symbol = pos['symbol']
+            side = pos['side'].lower() # 'long' o 'short' en API de Bitget
+            cant_tokens = pos['contracts']
+            
+            conflicto = False
+            motivo_cierre = ""
+            
+            if btc_bias == 'PANIC':
+                conflicto = True
+                motivo_cierre = "Pánico Global (Flash Crash) - Protección Total"
+            elif side == 'long' and btc_bias == 'BEARISH':
+                conflicto = True
+                motivo_cierre = "Pérdida de Confluencia: BTC es Bajista."
+            elif side == 'short' and btc_bias == 'BULLISH':
+                conflicto = True
+                motivo_cierre = "Pérdida de Confluencia: BTC es Alcista."
+                
+            if conflicto:
+                logger.warning(f"[MONITOR] Conflicto en {symbol}: {side} vs {btc_bias}. Iniciando cierre.")
+                orden_side = 'buy' if side == 'long' else 'sell'
+                
+                exito = core.cerrar_posicion_estrategica(symbol, orden_side, cant_tokens, motivo_cierre)
+                if exito:
+                    memoria['veda'][symbol] = now + (30 * 60)
+                    if symbol in memoria['operaciones_activas']:
+                        memoria['operaciones_activas'].remove(symbol)
+                    core.guardar_memoria(memoria)
+                    
+    except Exception as e:
+        logger.error(f"[MONITOR] Error verificando posiciones activas: {e}")
+
+    # Abortar el escaneo de NUEVAS monedas si hay Pánico
     if btc_bias == 'PANIC':
-        logger.info("[TDF-BOT] Escaneo abortado por Volatilidad Extrema en Bitcoin.")
+        logger.info("[TDF-BOT] Escaneo Búsqueda abortado por Volatilidad Extrema en Bitcoin.")
         return
 
+    # Escaneo Normal
     try:
         tickers = core.exchange.fetch_tickers()
         monedas = sorted(
             [{'s': s, 'v': t.get('quoteVolume', 0) or 0} for s, t in tickers.items() if ':USDT' in s],
             key=lambda x: float(x['v']), reverse=True
         )[:NUM_MONEDAS_ESCANEAR]
-        simbolos_a_escanear = [m['s'] for m in monedas]
-        logger.info(f"[TDF-BOT] 🔍 Escaneando top {NUM_MONEDAS_ESCANEAR} monedas por volumen...")
+        
+        for m in monedas:
+            symbol = m['s']
+            
+            # Check Veda
+            now = time.time()
+            if 'veda' not in memoria:
+                memoria['veda'] = {}
+            veda_exp = memoria['veda'].get(symbol, 0)
+            if now < veda_exp:
+                logger.info(f"[MONITOR] {symbol} está en veda ({int(veda_exp - now)}s). Saltando.")
+                continue
+                
+            if symbol in memoria.get("operaciones_activas", []):
+                continue
+                
+            if len(memoria.get("operaciones_activas", [])) >= MAX_OPERACIONES:
+                logger.info("[TDF-BOT] Límite de posiciones alcanzado — deteniendo búsqueda")
+                break
+                
+            try:
+                _procesar_simbolo(symbol, memoria, core.exchange, core.abrir_operacion, btc_bias)
+            except Exception as e:
+                logger.error(f"[TDF-BOT] Error procesando {symbol}: {e}", exc_info=True)
+            time.sleep(0.05)   # pausa corta entre símbolos (rate limit manejado por ccxt)
+
     except Exception as e:
         logger.error(f"[TDF-BOT] ❌ Error obteniendo símbolos por volumen: {e}")
         return
 
-    for symbol in simbolos_a_escanear:
-        # Re-leer memoria en cada ciclo de símbolo para evitar doble apertura
-        memoria = core.cargar_memoria()
-        if len(memoria.get("operaciones_activas", [])) >= MAX_OPERACIONES:
-            logger.info("[TDF-BOT] Límite alcanzado durante el ciclo — deteniendo escaneo")
-            break
-        try:
-            _procesar_simbolo(symbol, memoria, core.exchange, core.abrir_operacion, btc_bias)
-        except Exception as e:
-            logger.error(f"[TDF-BOT] Error procesando {symbol}: {e}", exc_info=True)
-        time.sleep(0.05)   # pausa corta entre símbolos (rate limit manejado por ccxt)
-
-    logger.info(f"[TDF-BOT] ✅ BARRIDO COMPLETO: {len(simbolos_a_escanear)} monedas analizadas. Próximo escaneo en 5 minutos.")
+    logger.info(f"[TDF-BOT] ✅ BARRIDO COMPLETO: {len(monedas)} monedas analizadas. Próximo escaneo en 5 minutos.")
 
 
 # ==============================================================
