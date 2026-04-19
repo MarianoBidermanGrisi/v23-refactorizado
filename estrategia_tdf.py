@@ -28,6 +28,7 @@ from tdf_indicator import TrendDurationForecast
 from vp_pivots_indicator import VolumeProfilePivots
 from macd_sr_indicator import MacdSupportResistance
 from adx_di_indicator import calcular_adx_di
+from sqz_momentum_indicator import calcular_squeeze_momentum
 
 # bot_web_service es el módulo padre que importa este archivo.
 # Se accede vía sys.modules para evitar el circular import.
@@ -222,7 +223,14 @@ def _procesar_simbolo(symbol, memoria, exchange, abrir_operacion):
         f"| TrendOK={adx_result['trend_ok']}"
     )
 
-    # 5. Aplicar Filtro Abierto de Confluencia de 3 Fases
+    # Evaluar Squeeze Momentum (5to filtro de confluencia — Explosión de volatilidad)
+    sqz_result = calcular_squeeze_momentum(ohlcv_confirmadas)
+    logger.info(
+        f"[SQZMOM] {symbol} | val={sqz_result['val']} | bcolor={sqz_result['bcolor']} "
+        f"| sqzOn={sqz_result['sqz_on']} | sqzOff={sqz_result['sqz_off']}"
+    )
+
+    # 5. Aplicar Filtro Abierto de Confluencia Múltiple
     if signal is None:
         return
 
@@ -239,6 +247,14 @@ def _procesar_simbolo(symbol, memoria, exchange, abrir_operacion):
             logger.info(f"[Confluencia] BUY en {symbol} denegada: DI- domina sobre DI+ (dominio={adx_result['dominio']}).")
             return
 
+        # ── BLOQUE SQZMOM: 5to Filtro de Confluencia ──
+        if sqz_result['sqz_on']:
+            logger.info(f"[Confluencia] BUY en {symbol} denegada: Squeeze Activo (Mercado en compresión).")
+            return
+        if not sqz_result['momentum_bullish']:
+            logger.info(f"[Confluencia] BUY en {symbol} denegada: SQZMOM Histograma Negativo.")
+            return
+
         # Bloques de Cancelación Duros (VP + MACD)
         if not vpc_delta_pos:
             logger.info(f"[Confluencia] BUY en {symbol} denegada: VP Delta Negativo (Vendedores al mando).")
@@ -247,7 +263,12 @@ def _procesar_simbolo(symbol, memoria, exchange, abrir_operacion):
             logger.info(f"[Confluencia] BUY en {symbol} denegada: MACD es Bajista (Bajo Señal).")
             return
             
-        tendencia += " + 4-X CONFIRMED"
+        tendencia += " + 5-X CONFIRMED"
+
+        # Bonus SQZMOM: Squeeze liberando con aceleración
+        if sqz_result['sqz_off'] and sqz_result['momentum_accel']:
+            confidence += 15
+            tendencia += " (SQZ Explosión 🚀)"
 
         # Bonus ADX: cruce recíente DI+ sobre DI- suma confianza extra
         if adx_result['cruce_long']:
@@ -282,6 +303,14 @@ def _procesar_simbolo(symbol, memoria, exchange, abrir_operacion):
             logger.info(f"[Confluencia] SELL en {symbol} denegada: DI+ domina sobre DI- (dominio={adx_result['dominio']}).")
             return
 
+        # ── BLOQUE SQZMOM: 5to Filtro de Confluencia ──
+        if sqz_result['sqz_on']:
+            logger.info(f"[Confluencia] SELL en {symbol} denegada: Squeeze Activo (Mercado en compresión).")
+            return
+        if sqz_result['momentum_bullish']:
+            logger.info(f"[Confluencia] SELL en {symbol} denegada: SQZMOM Histograma Positivo.")
+            return
+
         # Bloques de Cancelación Duros (VP + MACD)
         if vpc_delta_pos:
             logger.info(f"[Confluencia] SELL en {symbol} denegada: VP Delta Positivo (Compradores al mando).")
@@ -290,7 +319,12 @@ def _procesar_simbolo(symbol, memoria, exchange, abrir_operacion):
             logger.info(f"[Confluencia] SELL en {symbol} denegada: MACD es Alcista (Sobre Señal).")
             return
             
-        tendencia += " + 4-X CONFIRMED"
+        tendencia += " + 5-X CONFIRMED"
+
+        # Bonus SQZMOM: Squeeze liberando con aceleración
+        if sqz_result['sqz_off'] and sqz_result['momentum_accel']:
+            confidence += 15
+            tendencia += " (SQZ Explosión 🚀)"
 
         # Bonus ADX: cruce reciente DI- sobre DI+ suma confianza extra
         if adx_result['cruce_short']:
