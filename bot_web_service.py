@@ -511,10 +511,7 @@ def run_bot_loop():
             time.sleep(60)  # pausa extra ante error
 
 
-# Lanzar hilo demonio al importar el módulo
-bot_thread = threading.Thread(target=run_bot_loop, daemon=True)
-bot_thread.start()
-logger.info("🧵 Hilo del bot lanzado en background")
+# El inicio del hilo demonio ha sido movido abajo para garantizar dependencias.
 
 
 @app.route('/')
@@ -595,8 +592,12 @@ def setup_telegram_webhook():
 
 
 # ==============================================================
-#  10. MAIN — ARRANQUE EN RENDER
+#  10. INICIO DEL SISTEMA (THREADING + MAIN)
 # ==============================================================
+bot_thread = threading.Thread(target=run_bot_loop, daemon=True)
+bot_thread.start()
+logger.info("🧵 Hilo del bot lanzado en background")
+
 if __name__ == '__main__':
     logger.info("🚀 Iniciando bot en Render.com (Modo Desarrollo)...")
     port = int(os.environ.get('PORT', 5000))
