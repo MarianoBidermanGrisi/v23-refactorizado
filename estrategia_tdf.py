@@ -27,6 +27,7 @@ logger = logging.getLogger(__name__)
 from tdf_indicator import TrendDurationForecast
 from vp_pivots_indicator import VolumeProfilePivots
 from macd_sr_indicator import MacdSupportResistance
+from adx_di_indicator import calcular_adx_di
 
 # bot_web_service es el módulo padre que importa este archivo.
 # Se accede vía sys.modules para evitar el circular import.
@@ -62,6 +63,9 @@ CONFIANZA_MIN = 60
 
 # Límite de operaciones simultáneas
 MAX_OPERACIONES = 5
+
+# Umbral ADX para considerar tendencia activa (4to filtro de confluencia)
+ADX_UMBRAL = 20
 
 # Estado de los indicadores por símbolo (se mantiene entre ciclos)
 _tdf_instances: Dict[str, TrendDurationForecast] = {}
@@ -210,6 +214,14 @@ def _procesar_simbolo(symbol, memoria, exchange, abrir_operacion):
     # Evaluar MACD S/R (Confluencia de Momentum)
     macd_result = macd_ind.update(latest_ohlcv)
 
+    # Evaluar ADX + DI (4to filtro de confluencia — Fuerza y Dirección de Tendencia)
+    adx_result = calcular_adx_di(ohlcv_confirmadas, length=14, umbral=ADX_UMBRAL)
+    logger.info(
+        f"[ADX] {symbol} | ADX={adx_result['adx']} | DI+={adx_result['di_plus']} "
+        f"| DI-={adx_result['di_minus']} | Dominio={adx_result['dominio']} "
+        f"| TrendOK={adx_result['trend_ok']}"
+    )
+
     # 5. Aplicar Filtro Abierto de Confluencia de 3 Fases
     if signal is None:
         return
@@ -219,7 +231,15 @@ def _procesar_simbolo(symbol, memoria, exchange, abrir_operacion):
     macd_bullish = macd_result["is_bullish"]
 
     if signal == 'BUY':
-        # Bloques de Cancelación Duros
+        # ── BLOQUE ADX: 4to Filtro de Confluencia ──
+        if not adx_result['trend_ok']:
+            logger.info(f"[Confluencia] BUY en {symbol} denegada: ADX={adx_result['adx']:.1f} < {ADX_UMBRAL} (sin tendencia).")
+            return
+        if adx_result['dominio'] != 'BULL':
+            logger.info(f"[Confluencia] BUY en {symbol} denegada: DI- domina sobre DI+ (dominio={adx_result['dominio']}).")
+            return
+
+        # Bloques de Cancelación Duros (VP + MACD)
         if not vpc_delta_pos:
             logger.info(f"[Confluencia] BUY en {symbol} denegada: VP Delta Negativo (Vendedores al mando).")
             return
@@ -227,7 +247,12 @@ def _procesar_simbolo(symbol, memoria, exchange, abrir_operacion):
             logger.info(f"[Confluencia] BUY en {symbol} denegada: MACD es Bajista (Bajo Señal).")
             return
             
-        tendencia += " + 3-X CONFIRMED"
+        tendencia += " + 4-X CONFIRMED"
+
+        # Bonus ADX: cruce recíente DI+ sobre DI- suma confianza extra
+        if adx_result['cruce_long']:
+            confidence += 10
+            tendencia += " (DI+ Cruce)"
         
         # Filtros de Posición y Rebotes para puntuar Confianza Final
         if precio_actual >= vpc_poc:
@@ -249,7 +274,15 @@ def _procesar_simbolo(symbol, memoria, exchange, abrir_operacion):
             tendencia += " (Rebote MACD)"
 
     elif signal == 'SELL':
-        # Bloques de Cancelación Duros
+        # ── BLOQUE ADX: 4to Filtro de Confluencia ──
+        if not adx_result['trend_ok']:
+            logger.info(f"[Confluencia] SELL en {symbol} denegada: ADX={adx_result['adx']:.1f} < {ADX_UMBRAL} (sin tendencia).")
+            return
+        if adx_result['dominio'] != 'BEAR':
+            logger.info(f"[Confluencia] SELL en {symbol} denegada: DI+ domina sobre DI- (dominio={adx_result['dominio']}).")
+            return
+
+        # Bloques de Cancelación Duros (VP + MACD)
         if vpc_delta_pos:
             logger.info(f"[Confluencia] SELL en {symbol} denegada: VP Delta Positivo (Compradores al mando).")
             return
@@ -257,8 +290,13 @@ def _procesar_simbolo(symbol, memoria, exchange, abrir_operacion):
             logger.info(f"[Confluencia] SELL en {symbol} denegada: MACD es Alcista (Sobre Señal).")
             return
             
-        tendencia += " + 3-X CONFIRMED"
-        
+        tendencia += " + 4-X CONFIRMED"
+
+        # Bonus ADX: cruce reciente DI- sobre DI+ suma confianza extra
+        if adx_result['cruce_short']:
+            confidence += 10
+            tendencia += " (DI- Cruce)"
+
         # Filtros de Posición y Rebotes
         if precio_actual <= vpc_poc:
             confidence += 15
