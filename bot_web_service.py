@@ -451,7 +451,7 @@ def abrir_operacion(symbol, side, entrada, df, memoria, tendencia, fuerza):
             f"Par: `{symbol}`\n"
             f"Lado: `{side.upper()}`\n"
             f"Margen verificado: `{margen_verificado:.6f} USDT` (x{apalancamiento_verificado})\n"
-            f"Tendencia H1: `{tendencia}`\n"
+            f"Tendencia 15m: `{tendencia}`\n"
             f"Fuerza señal: `{fuerza}/7`\n"
             f"SL: `{sl_str}` | TP: `{tp_str}`\n"
             f"_Posición abierta exitosamente_ ✅"
