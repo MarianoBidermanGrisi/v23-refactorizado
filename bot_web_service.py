@@ -257,7 +257,7 @@ def _cerrar_posicion_emergencia(symbol, side, cant_tokens):
         cerrar_params = {
             'marginCoin': 'USDT',
             'marginMode': 'isolated',
-            'tradeSide':  'close',
+            'reduceOnly': True,
         }
         cerrar_params.pop('posSide', None)
         close_side = 'sell' if side == 'buy' else 'buy'
@@ -376,7 +376,6 @@ def abrir_operacion(symbol, side, entrada, df, memoria, tendencia, fuerza):
         params = {
             'marginCoin':             'USDT',
             'marginMode':             'isolated',
-            'tradeSide':              'open',
             'presetStopLossPrice':    sl_str,
             'presetStopSurplusPrice': tp_str,
         }
