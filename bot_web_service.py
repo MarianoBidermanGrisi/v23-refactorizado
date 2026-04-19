@@ -362,10 +362,13 @@ def abrir_operacion(symbol, side, entrada, df, memoria, tendencia, fuerza):
         else:
             logger.info(f"   ✅ REGLA DE ORO CUMPLIDA: {margen_real:.6f} USDT exacto")
 
-        # ── PASO 4: Calcular SL y TP ───────────────────────────────
-        rango  = df['high'].max() - df['low'].min()
-        sl     = entrada * (1 - STOP_FIJO) if side == 'buy' else entrada * (1 + STOP_FIJO)
-        tp     = entrada + (rango * 0.24)   if side == 'buy' else entrada - (rango * 0.24)
+        # ── PASO 4: Calcular SL y TP (Ratio 2:1 Estricto) ───────────────
+        # SL fijo configurado (1.6%). TP exigido al doble del riesgo (3.2%)
+        distancia_sl = entrada * STOP_FIJO
+        distancia_tp = distancia_sl * 2
+        
+        sl = entrada - distancia_sl if side == 'buy' else entrada + distancia_sl
+        tp = entrada + distancia_tp if side == 'buy' else entrada - distancia_tp
 
         sl_str = a_decimal_estricto(sl, market['precision']['price'])
         tp_str = a_decimal_estricto(tp, market['precision']['price'])
