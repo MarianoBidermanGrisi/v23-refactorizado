@@ -75,6 +75,93 @@ _macd_instances: Dict[str, MacdSupportResistance] = {}
 
 
 # ==============================================================
+#  FILTRO MAESTRO DE BITCOIN (Salud del Mercado)
+# ==============================================================
+
+def obtener_salud_btc(core, memoria):
+    """
+    Sincroniza la temporalidad macro (1H) y micro (15m) de Bitcoin
+    para determinar el 'Bias' (sesgo) operativo global.
+    """
+    import time
+    now = time.time()
+    panic_expiration = memoria.get('panic_lock_until', 0)
+    
+    # 1. Comprobar Bloqueo Activo
+    if now < panic_expiration:
+        return 'PANIC', f"Pausa restan {(panic_expiration - now)//60:.0f}m"
+    else:
+        if memoria.get('last_bias') == 'PANIC':
+            core.enviar_telegram("✅ **[BTC-MASTER] MERCADO ESTABILIZADO**\nLa volatilidad ha regresado a niveles normales. Se reanuda la operativa.")
+            memoria['last_bias'] = 'NEUTRAL'
+            core.guardar_memoria(memoria)
+
+    # 2. Detector de Flash Crashes (Vela 15m)
+    try:
+        btc_15m = core.exchange.fetch_ohlcv('BTC/USDT:USDT', timeframe='15m', limit=3)
+        if btc_15m:
+            vela = btc_15m[-2] # Última confirmada
+            o, h, l = float(vela[1]), float(vela[2]), float(vela[3])
+            if o > 0:
+                variacion = ((h - l) / o) * 100
+                if variacion >= 2.5:
+                    memoria['panic_lock_until'] = now + (30 * 60)
+                    memoria['last_bias'] = 'PANIC'
+                    core.guardar_memoria(memoria)
+                    core.enviar_telegram(f"🛑 **[BTC-ALERTA] VOLATILIDAD EXTREMA**\nMovimiento violento detectado ({variacion:.2f}%). El bot entra en **MODO ESPERA** por 30m.")
+                    return 'PANIC', f"Flash Crash ({variacion:.2f}%)"
+    except Exception as e:
+        logger.error(f"[BTC-MASTER] Error chequeo 15m: {e}")
+
+    # 3. Macro Salud Institucional (Velas 1h)
+    try:
+        btc_1h = core.exchange.fetch_ohlcv('BTC/USDT:USDT', timeframe='1h', limit=300)
+        if not btc_1h or len(btc_1h) < 200:
+            return 'NEUTRAL', "Datos insuficientes (1H)"
+            
+        closes = np.array([v[4] for v in btc_1h[:-1]], dtype=float)
+        
+        # A. Tendencia Global (MA 200)
+        ma_200 = np.mean(closes[-200:])
+        precio = closes[-1]
+        
+        # B. Fuerza del Movimiento (ADX)
+        adx_res = calcular_adx_di(btc_1h[:-1], length=14, umbral=20)
+        
+        # C. Dirección Local (TDF)
+        tdf = TrendDurationForecast(length=50, trend_sensitivity=3, samples=10)
+        tdf_res = tdf.update(closes)
+        
+        # Determinación de Jerarquía
+        bias = 'NEUTRAL'
+        if adx_res['trend_ok']:
+            if precio > ma_200 and tdf_res['trend'] == 1:
+                bias = 'BULLISH'
+            elif precio < ma_200 and tdf_res['trend'] == -1:
+                bias = 'BEARISH'
+                
+        # Mensajería si cambió el Bias
+        last_bias = memoria.get('last_bias')
+        if bias != last_bias and bias != 'PANIC':
+            if bias == 'BULLISH':
+                msg = "🟦 **[BTC-MASTER] BIAS: ALCISTA**\nBitcoin estable sobre la MA200 con impulso. Autorizadas únicamente señales en **LONG**.\n🚦 *Semáforo Alts: Solo Compras.*"
+            elif bias == 'BEARISH':
+                msg = "🟧 **[BTC-MASTER] BIAS: BAJISTA**\nBitcoin bajo la MA200 con impulso bajista. Autorizadas únicamente señales en **SHORT**.\n🚦 *Semáforo Alts: Solo Ventas.*"
+            else:
+                msg = "⚪ **[BTC-MASTER] BIAS: NEUTRAL**\nBitcoin lateral o sin dominancia. Operativa libre habilitada.\n🚦 *Semáforo Alts: Ambos lados.*"
+            
+            core.enviar_telegram(msg)
+            memoria['last_bias'] = bias
+            core.guardar_memoria(memoria)
+            
+        return bias, f"P={precio:.0f}|MA200={ma_200:.0f}|ADX={adx_res['adx']:.1f}"
+
+    except Exception as e:
+        logger.error(f"[BTC-MASTER] Error chequeo 1H: {e}", exc_info=True)
+        return 'NEUTRAL', "Error API"
+
+
+# ==============================================================
 #  FUNCIÓN PRINCIPAL — reemplaza el stub en render_bitget_core
 # ==============================================================
 
@@ -115,6 +202,16 @@ def escanear_mercado():
     if not core.verificar_cooldown(memoria):
         return
 
+    # ----------------------------------------------------------
+    #  NUEVO: EJECUTAR FILTRO MAESTRO DE BITCOIN
+    # ----------------------------------------------------------
+    btc_bias, btc_motivo = obtener_salud_btc(core, memoria)
+    logger.info(f"[BTC-MASTER] Bias Actual: {btc_bias} ({btc_motivo})")
+    
+    if btc_bias == 'PANIC':
+        logger.info("[TDF-BOT] Escaneo abortado por Volatilidad Extrema en Bitcoin.")
+        return
+
     try:
         tickers = core.exchange.fetch_tickers()
         monedas = sorted(
@@ -134,7 +231,7 @@ def escanear_mercado():
             logger.info("[TDF-BOT] Límite alcanzado durante el ciclo — deteniendo escaneo")
             break
         try:
-            _procesar_simbolo(symbol, memoria, core.exchange, core.abrir_operacion)
+            _procesar_simbolo(symbol, memoria, core.exchange, core.abrir_operacion, btc_bias)
         except Exception as e:
             logger.error(f"[TDF-BOT] Error procesando {symbol}: {e}", exc_info=True)
         time.sleep(0.05)   # pausa corta entre símbolos (rate limit manejado por ccxt)
@@ -146,8 +243,8 @@ def escanear_mercado():
 #  PROCESAMIENTO POR SÍMBOLO
 # ==============================================================
 
-def _procesar_simbolo(symbol, memoria, exchange, abrir_operacion):
-    """Descarga velas, evalúa TDF y ejecuta señal si aplica."""
+def _procesar_simbolo(symbol, memoria, exchange, abrir_operacion, btc_bias):
+    """Descarga velas, evalúa TDF y ejecuta señal respetando el Bias de BTC."""
 
     # 1. Obtener o crear instancias de indicadores para este símbolo
     if symbol not in _tdf_instances:
@@ -239,6 +336,11 @@ def _procesar_simbolo(symbol, memoria, exchange, abrir_operacion):
     macd_bullish = macd_result["is_bullish"]
 
     if signal == 'BUY':
+        # ── BLOQUE JERARQUÍA BTC ──
+        if btc_bias == 'BEARISH':
+            logger.info(f"[Confluencia] BUY en {symbol} denegada: BTC Bias es Bajista (No operar en contra).")
+            return
+            
         # ── BLOQUE ADX: 4to Filtro de Confluencia ──
         if not adx_result['trend_ok']:
             logger.info(f"[Confluencia] BUY en {symbol} denegada: ADX={adx_result['adx']:.1f} < {ADX_UMBRAL} (sin tendencia).")
@@ -295,6 +397,11 @@ def _procesar_simbolo(symbol, memoria, exchange, abrir_operacion):
             tendencia += " (Rebote MACD)"
 
     elif signal == 'SELL':
+        # ── BLOQUE JERARQUÍA BTC ──
+        if btc_bias == 'BULLISH':
+            logger.info(f"[Confluencia] SELL en {symbol} denegada: BTC Bias es Alcista (No operar en contra).")
+            return
+            
         # ── BLOQUE ADX: 4to Filtro de Confluencia ──
         if not adx_result['trend_ok']:
             logger.info(f"[Confluencia] SELL en {symbol} denegada: ADX={adx_result['adx']:.1f} < {ADX_UMBRAL} (sin tendencia).")
