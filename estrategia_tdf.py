@@ -60,6 +60,9 @@ TDF_SAMPLES     = 10
 # Confianza mínima requerida para abrir operación (0-100)
 CONFIANZA_MIN = 60
 
+# Límite de operaciones simultáneas
+MAX_OPERACIONES = 5
+
 # Estado de los indicadores por símbolo (se mantiene entre ciclos)
 _tdf_instances: Dict[str, TrendDurationForecast] = {}
 _vp_instances: Dict[str, VolumeProfilePivots] = {}
@@ -85,12 +88,22 @@ def escanear_mercado():
 
     memoria = core.cargar_memoria()
     saldo   = core.obtener_balance_real()
-    logger.info(f"[TDF-BOT] Ciclo de escaneo | Saldo: {saldo:.2f} USDT | "
-                f"Activas: {len(memoria['operaciones_activas'])}")
 
-    # No operar si ya hay posición abierta (modelo conservador: 1 posición max)
-    if memoria.get("operaciones_activas"):
-        logger.info("[TDF-BOT] Posición activa detectada — esperando cierre")
+    # Sincronizar memoria con el exchange real (Limpiar zombies si tocó TP/SL)
+    try:
+        posiciones = core.exchange.fetch_positions()
+        posiciones_reales = [p['symbol'] for p in posiciones if float(p.get('contracts', 0)) > 0]
+        memoria['operaciones_activas'] = list(set(posiciones_reales))
+        core.guardar_memoria(memoria)
+    except Exception as e:
+        logger.error(f"[TDF-BOT] Error sincronizando posiciones: {e}")
+
+    logger.info(f"[TDF-BOT] Ciclo de escaneo | Saldo: {saldo:.2f} USDT | "
+                f"Activas: {len(memoria['operaciones_activas'])}/{MAX_OPERACIONES}")
+
+    # No operar si ya se alcanzó el límite máximo
+    if len(memoria.get("operaciones_activas", [])) >= MAX_OPERACIONES:
+        logger.info(f"[TDF-BOT] Límite de {MAX_OPERACIONES} posiciones alcanzado — esperando cierres")
         return
 
     # Verificar cooldown global
@@ -112,8 +125,8 @@ def escanear_mercado():
     for symbol in simbolos_a_escanear:
         # Re-leer memoria en cada ciclo de símbolo para evitar doble apertura
         memoria = core.cargar_memoria()
-        if memoria.get("operaciones_activas"):
-            logger.info("[TDF-BOT] Posición abierta durante el ciclo — deteniendo escaneo")
+        if len(memoria.get("operaciones_activas", [])) >= MAX_OPERACIONES:
+            logger.info("[TDF-BOT] Límite alcanzado durante el ciclo — deteniendo escaneo")
             break
         try:
             _procesar_simbolo(symbol, memoria, core.exchange, core.abrir_operacion)
