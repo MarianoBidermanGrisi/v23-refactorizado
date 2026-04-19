@@ -267,6 +267,47 @@ def _cerrar_posicion_emergencia(symbol, side, cant_tokens):
         logger.warning(f"   ⚠️ Error al cerrar {symbol}: {e}")
 
 
+def cerrar_posicion_estrategica(symbol, side, cant_tokens, motivo):
+    """
+    Cierre Técnico Activo: Cancela órdenes huérfanas, cierra posición y envía Telegram.
+    """
+    try:
+        # 1. Cierre a mercado con reduceOnly (evitar posiciones contrarias)
+        cerrar_params = {
+            'marginCoin': 'USDT',
+            'marginMode': 'isolated',
+            'reduceOnly': True,
+        }
+        close_side = 'sell' if side == 'buy' else 'buy'
+        exchange.create_order(symbol, 'market', close_side, float(cant_tokens), params=cerrar_params)
+        logger.info(f"[MONITOR] Orden Market (reduceOnly) enviada para {symbol}.")
+
+        # 2. Cancelar huérfanas (SL y TP)
+        try:
+            exchange.cancel_all_orders(symbol, params={'marginCoin': 'USDT'})
+            logger.info(f"[MONITOR] Órdenes huérfanas canceladas para {symbol}.")
+        except Exception as cx_e:
+            logger.warning(f"[MONITOR] Aviso al cancelar huérfanas {symbol} (quizás ya no existían): {cx_e}")
+
+        # 3. Notificar a Telegram
+        msg = (
+            f"⚠️ **[CIERRE TÉCNICO ESTRATÉGICO]**\n"
+            f"Par: `{symbol}`\n"
+            f"Lado: `{side.upper()}`\n"
+            f"Motivo: `{motivo}`\n\n"
+            f"🛡️ **Acciones:**\n"
+            f"• ✅ Posición liquidada.\n"
+            f"• ✅ Huérfanas borradas.\n"
+            f"• 🕒 Veda de 30m activada."
+        )
+        enviar_telegram(msg=msg)
+        return True
+
+    except Exception as e:
+        logger.error(f"[MONITOR] Error Crítico al ejecutar Cierre Técnico en {symbol}: {e}")
+        return False
+
+
 def abrir_operacion(symbol, side, entrada, df, memoria, tendencia, fuerza):
     """
     Ejecuta una operación de futuros perpetuos en Bitget.
