@@ -29,6 +29,7 @@ from vp_pivots_indicator import VolumeProfilePivots
 from macd_sr_indicator import MacdSupportResistance
 from adx_di_indicator import calcular_adx_di
 from sqz_momentum_indicator import calcular_squeeze_momentum
+from supertrend_indicator import Supertrend
 
 # bot_web_service es el módulo padre que importa este archivo.
 # Se accede vía sys.modules para evitar el circular import.
@@ -72,6 +73,7 @@ ADX_UMBRAL = 20
 _tdf_instances: Dict[str, TrendDurationForecast] = {}
 _vp_instances: Dict[str, VolumeProfilePivots] = {}
 _macd_instances: Dict[str, MacdSupportResistance] = {}
+_st_instances: Dict[str, Supertrend] = {}
 
 
 # ==============================================================
@@ -167,11 +169,13 @@ def _procesar_simbolo(symbol, memoria, exchange, abrir_operacion):
             slow_length=26,
             signal_length=9
         )
-        logger.info(f"[TDF-BOT] Instancias TDF, VP y MACD creadas para {symbol}")
+        _st_instances[symbol] = Supertrend(period=10, multiplier=3.0)
+        logger.info(f"[TDF-BOT] Instancias TDF, VP, MACD y ST creadas para {symbol}")
 
     tdf = _tdf_instances[symbol]
     vp = _vp_instances[symbol]
     macd_ind = _macd_instances[symbol]
+    st_ind = _st_instances[symbol]
 
     # 2. Descargar velas OHLCV (solo velas cerradas = confirmadas)
     ohlcv = exchange.fetch_ohlcv(symbol, timeframe=TIMEFRAME, limit=LIMIT_VELAS)
@@ -230,6 +234,12 @@ def _procesar_simbolo(symbol, memoria, exchange, abrir_operacion):
         f"| sqzOn={sqz_result['sqz_on']} | sqzOff={sqz_result['sqz_off']}"
     )
 
+    # Evaluar Supertrend (6to filtro de confluencia)
+    st_result = st_ind.calcular(ohlcv_confirmadas)
+    logger.info(
+        f"[ST] {symbol} | Bullish={st_result['is_bullish']} | Line={st_result['line']:.4f}"
+    )
+
     # 5. Aplicar Filtro Abierto de Confluencia Múltiple
     if signal is None:
         return
@@ -263,7 +273,12 @@ def _procesar_simbolo(symbol, memoria, exchange, abrir_operacion):
             logger.info(f"[Confluencia] BUY en {symbol} denegada: MACD es Bajista (Bajo Señal).")
             return
             
-        tendencia += " + 5-X CONFIRMED"
+        # ── BLOQUE SUPERTREND: 6to Filtro de Confluencia ──
+        if not st_result["is_bullish"]:
+            logger.info(f"[Confluencia] BUY en {symbol} denegada: Supertrend es Bajista.")
+            return
+
+        tendencia += " + 6-X CONFIRMED"
 
         # Bonus SQZMOM: Squeeze liberando con aceleración
         if sqz_result['sqz_off'] and sqz_result['momentum_accel']:
@@ -319,7 +334,12 @@ def _procesar_simbolo(symbol, memoria, exchange, abrir_operacion):
             logger.info(f"[Confluencia] SELL en {symbol} denegada: MACD es Alcista (Sobre Señal).")
             return
             
-        tendencia += " + 5-X CONFIRMED"
+        # ── BLOQUE SUPERTREND: 6to Filtro de Confluencia ──
+        if st_result["is_bullish"]:
+            logger.info(f"[Confluencia] SELL en {symbol} denegada: Supertrend es Alcista.")
+            return
+
+        tendencia += " + 6-X CONFIRMED"
 
         # Bonus SQZMOM: Squeeze liberando con aceleración
         if sqz_result['sqz_off'] and sqz_result['momentum_accel']:
@@ -367,6 +387,8 @@ def _procesar_simbolo(symbol, memoria, exchange, abrir_operacion):
     # 7. Construir DataFrame mínimo para abrir_operacion()
     import pandas as pd
     df = pd.DataFrame(ohlcv_confirmadas[-60:], columns=["ts", "open", "high", "low", "close", "vol"])
+    if "st_series" in st_result:
+        df["supertrend"] = st_result["st_series"][-60:]
 
     side = eval_result["side"]   # 'buy' o 'sell'
 
