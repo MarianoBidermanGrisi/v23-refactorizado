@@ -31,6 +31,7 @@ from adx_di_indicator import calcular_adx_di
 from sqz_momentum_indicator import calcular_squeeze_momentum
 from supertrend_indicator import Supertrend
 from smc_indicator import SmartMoneyConcepts
+from williams_vix_fix import calcular_wvf
 
 # bot_web_service es el módulo padre que importa este archivo.
 # Se accede vía sys.modules para evitar el circular import.
@@ -250,6 +251,14 @@ def _procesar_simbolo(symbol, memoria, exchange, abrir_operacion):
     struct_str = "ALCISTA" if is_bullish_struct else "BAJISTA"
     logger.info(f"[SMC] {symbol} | Estructura={struct_str} | OBs_Bull={len(smc_result['bullish_obs'])} | OBs_Bear={len(smc_result['bearish_obs'])}")
 
+    # Evaluar Williams Vix Fix (8vo Filtro — Fondos y Complacencia)
+    wvf_result = calcular_wvf(ohlcv_confirmadas)
+    if wvf_result:
+        logger.info(
+            f"[WVF] {symbol} | Val={wvf_result['wvf']:.2f} | BottomSignal={wvf_result['is_bottom_signal']} "
+            f"| Complacencia={wvf_result['is_complacency']}"
+        )
+
     # 5. Aplicar Filtro Abierto de Confluencia Múltiple
     if signal is None:
         return
@@ -336,6 +345,11 @@ def _procesar_simbolo(symbol, memoria, exchange, abrir_operacion):
             confidence += 15
             tendencia += " (Rebote MACD)"
 
+        # Bonus WVF: Pico de miedo/fondo detectado
+        if wvf_result and wvf_result['is_bottom_signal']:
+            confidence += 20
+            tendencia += " (WVF Bottom 🟢)"
+
     elif signal == 'SELL':
         # ── BLOQUE ADX: 4to Filtro de Confluencia ──
         if not adx_result['trend_ok']:
@@ -413,6 +427,17 @@ def _procesar_simbolo(symbol, memoria, exchange, abrir_operacion):
         if near_macd_res:
             confidence += 15
             tendencia += " (Rechazo MACD)"
+
+        # ── BLOQUE WVF: 8vo Filtro de Complacencia para Shorts ──
+        if wvf_result and not wvf_result['is_complacency']:
+            # Si hay volatilidad bajista alta (miedo), no es buen momento para shortear "tardío"
+            if wvf_result['wvf'] > wvf_result['upper_band'] * 0.8:
+                logger.info(f"[Confluencia] SELL en {symbol} denegada: WVF alto ({wvf_result['wvf']:.1f}), detectado miedo de fondo.")
+                return
+            
+        if wvf_result and wvf_result['is_complacency']:
+            confidence += 15
+            tendencia += " (Complacencia WVF 🔵)"
 
     # Ajustar fuerza final base 7 (luego del bonus de confluencia)
     confidence = min(100, confidence)
