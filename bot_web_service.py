@@ -166,6 +166,10 @@ def generar_grafico_operacion(symbol, side, df, entrada, sl, tp):
             apds.append(mpf.make_addplot(tp_line, color='#00FF00', linestyle='-', width=1.5, panel=0))
             apds.append(mpf.make_addplot(sl_line, color='#FF0000', linestyle='-', width=1.5, panel=0))
 
+        if 'supertrend' in df_plot.columns:
+            st_line = df_plot['supertrend'].astype(float).tolist()
+            apds.append(mpf.make_addplot(st_line, color='#00FFFF', linestyle='--', width=2.0, panel=0))
+
         title_str = f'{symbol} | {side.upper()} | ENTRADA: {entrada}'
         buf = BytesIO()
         fig, axes = mpf.plot(
