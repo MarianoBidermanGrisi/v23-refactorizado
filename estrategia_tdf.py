@@ -268,6 +268,8 @@ def _procesar_simbolo(symbol, memoria, exchange, abrir_operacion):
     if signal is None:
         return
 
+    side = eval_result["side"]   # 'buy' o 'sell'
+
     vpc_delta_pos = vp_result["delta_positive"]
     vpc_poc = vp_result["poc_price"]
     macd_bullish = macd_result["is_bullish"]
@@ -491,8 +493,6 @@ def _procesar_simbolo(symbol, memoria, exchange, abrir_operacion):
     df = pd.DataFrame(ohlcv_confirmadas[-60:], columns=["ts", "open", "high", "low", "close", "vol"])
     if "st_series" in st_result:
         df["supertrend"] = st_result["st_series"][-60:]
-
-    side = eval_result["side"]   # 'buy' o 'sell'
 
     logger.info(
         f"[TDF-BOT] 🚀 SEÑAL {signal} en {symbol} | "
