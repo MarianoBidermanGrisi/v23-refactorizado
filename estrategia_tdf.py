@@ -303,18 +303,20 @@ def _procesar_simbolo(symbol, memoria, exchange, abrir_operacion):
         if not st_result["is_bullish"]:
             logger.info(f"[Confluencia] BUY en {symbol} denegada: Supertrend es Bajista.")
             return
-"""
-        # ── BLOQUE SMC: 7mo Filtro de Confluencia y Localización ──
-        if not is_bullish_struct:
-            logger.info(f"[Confluencia] BUY en {symbol} denegada: Estructura SMC es Bajista (esperando CHoCH).")
-            return
+
+        # ── BLOQUE SMC: 7mo Filtro de Confluencia y Localización (ANULADO) ──
+        # if not is_bullish_struct:
+        #     logger.info(f"[Confluencia] BUY en {symbol} denegada: Estructura SMC es Bajista (esperando CHoCH).")
+        #     return
             
-        for ob in smc_result["bearish_obs"]:
-            distancia_al_ob = (ob['bottom'] - precio_actual) / precio_actual
-            if precio_actual <= ob['top'] and distancia_al_ob < 0.008:
-                logger.info(f"[Confluencia] BUY en {symbol} denegada: Muro institucional cercano (Bearish OB en {ob['bottom']:.4f}).")
-                return
-"""
+        # for ob in smc_result["bearish_obs"]:
+        #     distancia_al_ob = (ob['bottom'] - precio_actual) / precio_actual
+        #     if precio_actual <= ob['top'] and distancia_al_ob < 0.008:
+        #         logger.info(f"[Confluencia] BUY en {symbol} denegada: Muro institucional cercano (Bearish OB en {ob['bottom']:.4f}).")
+        #         return
+
+        tendencia += " + 7-X CONFIRMED"
+
         tendencia += " + 7-X CONFIRMED"
 
         # Bonus SQZMOM: Squeeze liberando con aceleración
@@ -386,18 +388,20 @@ def _procesar_simbolo(symbol, memoria, exchange, abrir_operacion):
         if st_result["is_bullish"]:
             logger.info(f"[Confluencia] SELL en {symbol} denegada: Supertrend es Alcista.")
             return
-"""
-        # ── BLOQUE SMC: 7mo Filtro de Confluencia y Localización ──
-        if is_bullish_struct:
-            logger.info(f"[Confluencia] SELL en {symbol} denegada: Estructura SMC es Alcista (esperando CHoCH).")
-            return
+
+        # ── BLOQUE SMC: 7mo Filtro de Confluencia y Localización (ANULADO) ──
+        # if is_bullish_struct:
+        #     logger.info(f"[Confluencia] SELL en {symbol} denegada: Estructura SMC es Alcista (esperando CHoCH).")
+        #     return
             
-        for ob in smc_result["bullish_obs"]:
-            distancia_al_ob = (precio_actual - ob['top']) / precio_actual
-            if precio_actual >= ob['bottom'] and distancia_al_ob < 0.008:
-                logger.info(f"[Confluencia] SELL en {symbol} denegada: Muro institucional cercano (Bullish OB en {ob['top']:.4f}).")
-                return
-"""
+        # for ob in smc_result["bullish_obs"]:
+        #     distancia_al_ob = (precio_actual - ob['top']) / precio_actual
+        #     if precio_actual >= ob['bottom'] and distancia_al_ob < 0.008:
+        #         logger.info(f"[Confluencia] SELL en {symbol} denegada: Muro institucional cercano (Bullish OB en {ob['top']:.4f}).")
+        #         return
+
+        tendencia += " + 7-X CONFIRMED"
+
         tendencia += " + 7-X CONFIRMED"
 
         # Bonus SQZMOM: Squeeze liberando con aceleración
