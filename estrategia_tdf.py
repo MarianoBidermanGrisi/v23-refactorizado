@@ -32,6 +32,8 @@ from sqz_momentum_indicator import calcular_squeeze_momentum
 from supertrend_indicator import Supertrend
 from smc_indicator import SmartMoneyConcepts
 from williams_vix_fix import calcular_wvf
+from filtro_confluencia_historica import analizar_confluencia_historica
+
 
 # bot_web_service es el módulo padre que importa este archivo.
 # Se accede vía sys.modules para evitar el circular import.
@@ -70,6 +72,9 @@ MAX_OPERACIONES = 5
 
 # Umbral ADX para considerar tendencia activa (4to filtro de confluencia)
 ADX_UMBRAL = 20
+
+# Umbral 9no Filtro: Movimiento máximo permitido desde el inicio de confluencia
+MOVIMIENTO_MAX_FILTRO_9 = 1.5
 
 # Estado de los indicadores por símbolo (se mantiene entre ciclos)
 _tdf_instances: Dict[str, TrendDurationForecast] = {}
@@ -438,6 +443,34 @@ def _procesar_simbolo(symbol, memoria, exchange, abrir_operacion):
         if wvf_result and wvf_result['is_complacency']:
             confidence += 15
             tendencia += " (Complacencia WVF 🔵)"
+
+    # ── 9no FILTRO: CONFLUENCIA HISTÓRICA (Entradas Tardías) ──
+    # Solo se ejecuta si llegamos hasta aquí (los 8 filtros previos alineados)
+    indicadores_para_log = {
+        "tdf": eval_result,
+        "adx": adx_result,
+        "sqz": sqz_result,
+        "vp": vp_result,
+        "macd": macd_result,
+        "st": st_result,
+        "smc": smc_result,
+        "wvf": wvf_result
+    }
+    
+    pasa_filtro_9, info_filtro_9 = analizar_confluencia_historica(
+        symbol=symbol,
+        side=side,
+        ohlcv_confirmadas=ohlcv_confirmadas,
+        indicadores_calculados=indicadores_para_log,
+        umbral_movimiento=MOVIMIENTO_MAX_FILTRO_9
+    )
+
+    if not pasa_filtro_9:
+        logger.info(f"[TDF-BOT] {symbol}: SEÑAL BLOQUEADA por 9no Filtro (Entrada tardía: {info_filtro_9['movimiento_pct']}% > {MOVIMIENTO_MAX_FILTRO_9}%)")
+        return
+
+    # Si pasa, añadimos info al log de tendencia
+    tendencia += f" | Hist: {info_filtro_9['movimiento_pct']}% ({info_filtro_9['velas_atras']}v)"
 
     # Ajustar fuerza final base 7 (luego del bonus de confluencia)
     confidence = min(100, confidence)
