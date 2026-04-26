@@ -270,6 +270,69 @@ def _cerrar_posicion_emergencia(symbol, side, cant_tokens):
     except Exception as e:
         logger.warning(f"   ⚠️ Error al cerrar {symbol}: {e}")
 
+def cerrar_operacion_estrategia(symbol, razon):
+    """Cierre inmediato por pérdida de fundamento técnico."""
+    try:
+        posiciones = exchange.fetch_positions()
+        posicion = next((p for p in posiciones 
+                        if p['symbol'] == symbol and float(p.get('contracts', 0)) > 0), None)
+        
+        if not posicion:
+            return
+            
+        cantidad = abs(float(posicion.get('contracts', 0)))
+        lado_actual = posicion.get('side', '').lower()
+        cerrar_side = 'sell' if lado_actual in ['buy', 'long'] else 'buy'
+        
+        params = {
+            'marginCoin': 'USDT',
+            'marginMode': 'isolated',
+            'reduceOnly': True,
+        }
+        params.pop('posSide', None)
+        
+        exchange.create_order(symbol, 'market', cerrar_side, float(cantidad), params=params)
+        
+        # Actualizar memoria
+        memoria = cargar_memoria()
+        if symbol in memoria.get('operaciones_activas', []):
+            memoria['operaciones_activas'].remove(symbol)
+        if 'sl_dinamicos' in memoria and symbol in memoria['sl_dinamicos']:
+            del memoria['sl_dinamicos'][symbol]
+        guardar_memoria(memoria)
+        
+        logger.info(f"✅ {symbol}: CERRADO por {razon}")
+        
+        msg = f"⚠️ *CIERRE JERÁRQUICO*\nPar: `{symbol}`\nRazón: {razon}\n_Operación cerrada para proteger capital_"
+        enviar_telegram(msg)
+        
+    except Exception as e:
+        logger.error(f"❌ Error cerrando {symbol} por estrategia: {e}")
+
+def actualizar_sl_dinamico(symbol, nuevo_sl, lado):
+    """Guarda un SL dinámico en memoria (Trailing) si es más estricto que el anterior."""
+    memoria = cargar_memoria()
+    if 'sl_dinamicos' not in memoria:
+        memoria['sl_dinamicos'] = {}
+        
+    sl_actual = memoria['sl_dinamicos'].get(symbol)
+    
+    if lado == 'buy':
+        if sl_actual is None or nuevo_sl > sl_actual:
+            memoria['sl_dinamicos'][symbol] = nuevo_sl
+            guardar_memoria(memoria)
+            logger.info(f"🛡️ {symbol}: SL Dinámico (Long) subido a {nuevo_sl:.6f}")
+    else:
+        if sl_actual is None or nuevo_sl < sl_actual:
+            memoria['sl_dinamicos'][symbol] = nuevo_sl
+            guardar_memoria(memoria)
+            logger.info(f"🛡️ {symbol}: SL Dinámico (Short) bajado a {nuevo_sl:.6f}")
+
+def obtener_sl_dinamico(symbol):
+    """Obtiene el SL dinámico de la memoria."""
+    memoria = cargar_memoria()
+    return memoria.get('sl_dinamicos', {}).get(symbol)
+
 
 def abrir_operacion(symbol, side, entrada, df, memoria, tendencia, fuerza):
     """
