@@ -105,21 +105,28 @@ def escanear_mercado():
     saldo   = core.obtener_balance_real()
 
     # Sincronizar memoria con el exchange real (Limpiar zombies si tocó TP/SL)
+    posiciones_activas_dict = {}
     try:
         posiciones = core.exchange.fetch_positions()
-        posiciones_reales = [p['symbol'] for p in posiciones if float(p.get('contracts', 0)) > 0]
-        memoria['operaciones_activas'] = list(set(posiciones_reales))
+        for p in posiciones:
+            if float(p.get('contracts', 0)) > 0:
+                posiciones_activas_dict[p['symbol']] = p
+                
+        memoria['operaciones_activas'] = list(posiciones_activas_dict.keys())
+        
+        # Limpiar sl_dinamicos zombies
+        if 'sl_dinamicos' in memoria:
+            zombies = [s for s in memoria['sl_dinamicos'] if s not in memoria['operaciones_activas']]
+            for z in zombies:
+                del memoria['sl_dinamicos'][z]
+                
         core.guardar_memoria(memoria)
     except Exception as e:
-        logger.error(f"[TDF-BOT] Error sincronizando posiciones: {e}")
+        logger.error(f"[TDF-BOT] Error sincronizando posiciones: {e} - ABORTANDO CICLO")
+        return  # ABORTO CRÍTICO: Si no sabemos qué hay abierto, no podemos gestionar ni abrir nada.
 
     logger.info(f"[TDF-BOT] Ciclo de escaneo | Saldo: {saldo:.2f} USDT | "
-                f"Activas: {len(memoria['operaciones_activas'])}/{MAX_OPERACIONES}")
-
-    # No operar si ya se alcanzó el límite máximo
-    if len(memoria.get("operaciones_activas", [])) >= MAX_OPERACIONES:
-        logger.info(f"[TDF-BOT] Límite de {MAX_OPERACIONES} posiciones alcanzado — esperando cierres")
-        return
+                f"Activas: {len(memoria.get('operaciones_activas', []))}/{MAX_OPERACIONES}")
 
     # Verificar cooldown global
     if not core.verificar_cooldown(memoria):
@@ -131,20 +138,31 @@ def escanear_mercado():
             [{'s': s, 'v': t.get('quoteVolume', 0) or 0} for s, t in tickers.items() if ':USDT' in s],
             key=lambda x: float(x['v']), reverse=True
         )[:NUM_MONEDAS_ESCANEAR]
-        simbolos_a_escanear = [m['s'] for m in monedas]
-        logger.info(f"[TDF-BOT] 🔍 Escaneando top {NUM_MONEDAS_ESCANEAR} monedas por volumen...")
+        
+        # Asegurarnos de que las operaciones activas siempre estén al principio para evaluarlas
+        simbolos_a_escanear = list(memoria.get('operaciones_activas', []))
+        for m in monedas:
+            if m['s'] not in simbolos_a_escanear:
+                simbolos_a_escanear.append(m['s'])
+                
+        logger.info(f"[TDF-BOT] 🔍 Escaneando {len(simbolos_a_escanear)} monedas...")
     except Exception as e:
         logger.error(f"[TDF-BOT] ❌ Error obteniendo símbolos por volumen: {e}")
         return
 
     for symbol in simbolos_a_escanear:
-        # Re-leer memoria en cada ciclo de símbolo para evitar doble apertura
+        # Re-leer memoria en cada ciclo para evitar doble apertura
         memoria = core.cargar_memoria()
-        if len(memoria.get("operaciones_activas", [])) >= MAX_OPERACIONES:
-            logger.info("[TDF-BOT] Límite alcanzado durante el ciclo — deteniendo escaneo")
-            break
+        en_posicion = symbol in memoria.get("operaciones_activas", [])
+        
+        if not en_posicion and len(memoria.get("operaciones_activas", [])) >= MAX_OPERACIONES:
+            # Límite alcanzado, pero seguimos iterando para evaluar los que SÍ están activos
+            continue
+            
+        posicion = posiciones_activas_dict.get(symbol)
+        
         try:
-            _procesar_simbolo(symbol, memoria, core.exchange, core.abrir_operacion)
+            _procesar_simbolo(symbol, memoria, core.exchange, core.abrir_operacion, posicion)
         except Exception as e:
             logger.error(f"[TDF-BOT] Error procesando {symbol}: {e}", exc_info=True)
         time.sleep(0.05)   # pausa corta entre símbolos (rate limit manejado por ccxt)
@@ -156,7 +174,7 @@ def escanear_mercado():
 #  PROCESAMIENTO POR SÍMBOLO
 # ==============================================================
 
-def _procesar_simbolo(symbol, memoria, exchange, abrir_operacion):
+def _procesar_simbolo(symbol, memoria, exchange, abrir_operacion, posicion=None):
     """Descarga velas, evalúa TDF y ejecuta señal si aplica."""
 
     # 1. Obtener o crear instancias de indicadores para este símbolo
@@ -263,6 +281,22 @@ def _procesar_simbolo(symbol, memoria, exchange, abrir_operacion):
             f"[WVF] {symbol} | Val={wvf_result['wvf']:.2f} | BottomSignal={wvf_result['is_bottom_signal']} "
             f"| Complacencia={wvf_result['is_complacency']}"
         )
+
+    # ── NUEVO: GESTIÓN DE OPERACIONES ACTIVAS (Cierre Jerárquico) ──
+    if posicion is not None:
+        _evaluar_operacion_activa(
+            symbol=symbol,
+            posicion=posicion,
+            precio_actual=precio_actual,
+            adx_result=adx_result,
+            sqz_result=sqz_result,
+            st_result=st_result,
+            macd_result=macd_result,
+            vp_result=vp_result,
+            smc_result=smc_result,
+            wvf_result=wvf_result
+        )
+        return
 
     # 5. Aplicar Filtro Abierto de Confluencia Múltiple
     if signal is None:
@@ -487,10 +521,7 @@ def _procesar_simbolo(symbol, memoria, exchange, abrir_operacion):
         logger.info(f"[TDF-BOT] {symbol}: señal {signal} descartada (conf={confidence} < {CONFIANZA_MIN})")
         return
 
-    # 6. El símbolo ya tiene una posición activa
-    if symbol in memoria.get("operaciones_activas", []):
-        logger.info(f"[TDF-BOT] {symbol}: ya tiene posición activa")
-        return
+    # El chequeo de posición activa ya se realizó en la lógica de Cierre Jerárquico.
 
     # 7. Construir DataFrame mínimo para abrir_operacion()
     import pandas as pd
@@ -513,3 +544,97 @@ def _procesar_simbolo(symbol, memoria, exchange, abrir_operacion):
         tendencia = tendencia,
         fuerza    = fuerza,
     )
+
+def _evaluar_operacion_activa(symbol, posicion, precio_actual, adx_result, sqz_result, st_result, macd_result, vp_result, smc_result, wvf_result):
+    """
+    Evaluación jerárquica de operaciones activas para Cierre Anticipado o Trailing SL.
+    TP es 3.2% y SL es 1.6% (Unleveraged price %).
+    """
+    core = _core()
+    entrada = abs(float(posicion.get('entryPrice', 0)))
+    
+    side_raw = posicion.get('side', '').lower()
+    lado = 'buy' if side_raw in ['buy', 'long'] else 'sell'
+    
+    if lado == 'buy':
+        pnl_pct = (precio_actual - entrada) / entrada * 100
+    else:
+        pnl_pct = (entrada - precio_actual) / entrada * 100
+        
+    # Verificar SL Dinámico interno si existe
+    sl_dinamico = core.obtener_sl_dinamico(symbol)
+    if sl_dinamico:
+        if lado == 'buy' and precio_actual <= sl_dinamico:
+            core.cerrar_operacion_estrategia(symbol, f"TRAILING_SL_TOCADO ({sl_dinamico:.4f})")
+            return
+        elif lado == 'sell' and precio_actual >= sl_dinamico:
+            core.cerrar_operacion_estrategia(symbol, f"TRAILING_SL_TOCADO ({sl_dinamico:.4f})")
+            return
+            
+    filtros_rotos = []
+    
+    # ── NIVEL 1: FILTROS DUROS ──
+    # ADX < 18 rompe la estructura de tendencia
+    if adx_result['adx'] < 18:
+        filtros_rotos.append("ADX_BAJO (<18)")
+    
+    # Dominio invertido
+    if lado == 'buy' and adx_result['dominio'] != 'BULL':
+        filtros_rotos.append("DI_MINUS_DOMINA")
+    if lado == 'sell' and adx_result['dominio'] != 'BEAR':
+        filtros_rotos.append("DI_PLUS_DOMINA")
+        
+    # Squeeze en compresión anula el momentum direccional
+    if sqz_result['sqz_on']:
+        filtros_rotos.append("SQZ_ACTIVO (Compresión)")
+        
+    # Supertrend opuesto es CHoCH duro
+    if lado == 'buy' and not st_result['is_bullish']:
+        filtros_rotos.append("ST_BEARISH")
+    if lado == 'sell' and st_result['is_bullish']:
+        filtros_rotos.append("ST_BULLISH")
+        
+    # MACD / VP Delta (Más sensibles, pero válidos como Nivel 1)
+    if lado == 'buy' and not macd_result.get('is_bullish'):
+        filtros_rotos.append("MACD_BEARISH")
+    if lado == 'sell' and macd_result.get('is_bullish'):
+        filtros_rotos.append("MACD_BULLISH")
+        
+    if lado == 'buy' and not vp_result.get('delta_positive'):
+        filtros_rotos.append("VP_DELTA_NEGATIVO")
+    if lado == 'sell' and vp_result.get('delta_positive'):
+        filtros_rotos.append("VP_DELTA_POSITIVO")
+        
+    if filtros_rotos:
+        logger.warning(f"[MONITOR] {symbol}: FILTROS ROTOS → {filtros_rotos} | PnL: {pnl_pct:.2f}%")
+        
+        if pnl_pct < 0.2:  # Pérdida o ganancia marginal (< 2% ROE)
+            logger.warning(f"[MONITOR] {symbol}: Cerrando inmediato por filtros rotos.")
+            core.cerrar_operacion_estrategia(symbol, f"FILTROS_ROTOS: {', '.join(filtros_rotos)}")
+            return
+        else:
+            logger.info(f"[MONITOR] {symbol}: Estructura rota en ganancia. Cerrando para asegurar.")
+            core.cerrar_operacion_estrategia(symbol, f"ASEGURAR_GANANCIA (Filtros: {', '.join(filtros_rotos)})")
+            return
+            
+    # ── NIVEL 2: BONIFICACIONES Y AJUSTE SL ──
+    bonos_perdidos = []
+    
+    if adx_result['adx'] > 20 and not (adx_result.get('cruce_long') or adx_result.get('cruce_short')):
+        bonos_perdidos.append("SIN_CRUCE_DI")
+        
+    if sqz_result['sqz_off'] and not sqz_result.get('momentum_accel'):
+        bonos_perdidos.append("SQZ_SIN_ACEL")
+        
+    # Si perdimos bonos y PnL > 1.5% precio (15% ROE), SL a Breakeven +0.2%
+    if bonos_perdidos and pnl_pct >= 1.5:
+        logger.info(f"[MONITOR] {symbol}: Ajustando SL dinámico. Bonos perdidos: {bonos_perdidos}")
+        nuevo_sl = entrada * 1.002 if lado == 'buy' else entrada * 0.998
+        core.actualizar_sl_dinamico(symbol, nuevo_sl, lado)
+        
+    # ── NIVEL 3: TRAILING AGRESIVO ──
+    # Si PnL > 2.5% precio (25% ROE, casi en TP de 3.2%), pegamos el SL a 0.5% del precio actual
+    if pnl_pct >= 2.5:
+        distancia = precio_actual * 0.005
+        nuevo_sl = precio_actual - distancia if lado == 'buy' else precio_actual + distancia
+        core.actualizar_sl_dinamico(symbol, nuevo_sl, lado)
