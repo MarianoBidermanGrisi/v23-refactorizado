@@ -309,24 +309,30 @@ def cerrar_operacion_estrategia(symbol, razon):
     except Exception as e:
         logger.error(f"❌ Error cerrando {symbol} por estrategia: {e}")
 
-def actualizar_sl_dinamico(symbol, nuevo_sl, lado):
+def actualizar_sl_dinamico(symbol, nuevo_sl, lado, nivel="Ajuste"):
     """Guarda un SL dinámico en memoria (Trailing) si es más estricto que el anterior."""
     memoria = cargar_memoria()
     if 'sl_dinamicos' not in memoria:
         memoria['sl_dinamicos'] = {}
         
     sl_actual = memoria['sl_dinamicos'].get(symbol)
+    actualizado = False
     
     if lado == 'buy':
         if sl_actual is None or nuevo_sl > sl_actual:
             memoria['sl_dinamicos'][symbol] = nuevo_sl
-            guardar_memoria(memoria)
             logger.info(f"🛡️ {symbol}: SL Dinámico (Long) subido a {nuevo_sl:.6f}")
+            actualizado = True
     else:
         if sl_actual is None or nuevo_sl < sl_actual:
             memoria['sl_dinamicos'][symbol] = nuevo_sl
-            guardar_memoria(memoria)
             logger.info(f"🛡️ {symbol}: SL Dinámico (Short) bajado a {nuevo_sl:.6f}")
+            actualizado = True
+            
+    if actualizado:
+        guardar_memoria(memoria)
+        msg = f"🛡️ *NUEVO STOP LOSS ({nivel})*\nPar: `{symbol}`\nLado: `{lado.upper()}`\nSL Dinámico: `{nuevo_sl:.6f}`\n_Capital protegido_"
+        enviar_telegram(msg)
 
 def obtener_sl_dinamico(symbol):
     """Obtiene el SL dinámico de la memoria."""
