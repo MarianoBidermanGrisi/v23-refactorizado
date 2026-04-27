@@ -536,6 +536,8 @@ def abrir_operacion(symbol, side, entrada, df, memoria, tendencia, fuerza):
         logger.info(f"   🎯 {margen_verificado:.6f} USDT x{apalancamiento_verificado}")
         logger.info(f"{'='*55}\n")
 
+    except ccxt.InsufficientFunds as e:
+        logger.warning(f"⚠️ FONDOS INSUFICIENTES para abrir {side.upper()} en {symbol}. Margin USDT requerido: {MARGEN_USDT}. (Error: {e})")
     except Exception as e:
         logger.error(f"⚠️ Error inesperado en abrir_operacion [{symbol}]: {e}", exc_info=True)
 
@@ -669,11 +671,12 @@ def setup_telegram_webhook():
 # ==============================================================
 #  10. INICIO DEL SISTEMA (THREADING + MAIN)
 # ==============================================================
-bot_thread = threading.Thread(target=run_bot_loop, daemon=True)
-bot_thread.start()
-logger.info("🧵 Hilo del bot lanzado en background")
 
 if __name__ == '__main__':
+    bot_thread = threading.Thread(target=run_bot_loop, daemon=True)
+    bot_thread.start()
+    logger.info("🧵 Hilo del bot lanzado en background")
+    
     logger.info("🚀 Iniciando bot en Render.com (Modo Desarrollo)...")
     port = int(os.environ.get('PORT', 5000))
     logger.info(f"🌐 Flask escuchando en 0.0.0.0:{port}")
