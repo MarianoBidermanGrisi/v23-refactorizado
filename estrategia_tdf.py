@@ -351,8 +351,6 @@ def _procesar_simbolo(symbol, memoria, exchange, abrir_operacion, posicion=None)
 
         tendencia += " + 7-X CONFIRMED"
 
-        tendencia += " + 7-X CONFIRMED"
-
         # Bonus SQZMOM: Squeeze liberando con aceleración
         if sqz_result['sqz_off'] and sqz_result['momentum_accel']:
             confidence += 15
@@ -433,8 +431,6 @@ def _procesar_simbolo(symbol, memoria, exchange, abrir_operacion, posicion=None)
         #     if precio_actual >= ob['bottom'] and distancia_al_ob < 0.008:
         #         logger.info(f"[Confluencia] SELL en {symbol} denegada: Muro institucional cercano (Bullish OB en {ob['top']:.4f}).")
         #         return
-
-        tendencia += " + 7-X CONFIRMED"
 
         tendencia += " + 7-X CONFIRMED"
 
@@ -630,11 +626,11 @@ def _evaluar_operacion_activa(symbol, posicion, precio_actual, adx_result, sqz_r
     if bonos_perdidos and pnl_pct >= 1.5:
         logger.info(f"[MONITOR] {symbol}: Ajustando SL dinámico. Bonos perdidos: {bonos_perdidos}")
         nuevo_sl = entrada * 1.002 if lado == 'buy' else entrada * 0.998
-        core.actualizar_sl_dinamico(symbol, nuevo_sl, lado)
+        core.actualizar_sl_dinamico(symbol, nuevo_sl, lado, nivel="Nivel 2: Breakeven")
         
     # ── NIVEL 3: TRAILING AGRESIVO ──
     # Si PnL > 2.5% precio (25% ROE, casi en TP de 3.2%), pegamos el SL a 0.5% del precio actual
     if pnl_pct >= 2.5:
         distancia = precio_actual * 0.005
         nuevo_sl = precio_actual - distancia if lado == 'buy' else precio_actual + distancia
-        core.actualizar_sl_dinamico(symbol, nuevo_sl, lado)
+        core.actualizar_sl_dinamico(symbol, nuevo_sl, lado, nivel="Nivel 3: Trailing Agresivo")
