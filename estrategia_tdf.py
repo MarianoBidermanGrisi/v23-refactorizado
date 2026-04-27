@@ -569,37 +569,12 @@ def _evaluar_operacion_activa(symbol, posicion, precio_actual, adx_result, sqz_r
             
     filtros_rotos = []
     
-    # ── NIVEL 1: FILTROS DUROS ──
-    # ADX < 18 rompe la estructura de tendencia
-    if adx_result['adx'] < 18:
-        filtros_rotos.append("ADX_BAJO (<18)")
-    
-    # Dominio invertido
-    if lado == 'buy' and adx_result['dominio'] != 'BULL':
-        filtros_rotos.append("DI_MINUS_DOMINA")
-    if lado == 'sell' and adx_result['dominio'] != 'BEAR':
-        filtros_rotos.append("DI_PLUS_DOMINA")
-        
-    # Squeeze en compresión anula el momentum direccional
-    if sqz_result['sqz_on']:
-        filtros_rotos.append("SQZ_ACTIVO (Compresión)")
-        
-    # Supertrend opuesto es CHoCH duro
+    # ── NIVEL 1: FILTROS DUROS (Cierre Estructural) ──
+    # Supertrend opuesto es un verdadero Cambio de Carácter (CHoCH)
     if lado == 'buy' and not st_result['is_bullish']:
         filtros_rotos.append("ST_BEARISH")
     if lado == 'sell' and st_result['is_bullish']:
         filtros_rotos.append("ST_BULLISH")
-        
-    # MACD / VP Delta (Más sensibles, pero válidos como Nivel 1)
-    if lado == 'buy' and not macd_result.get('is_bullish'):
-        filtros_rotos.append("MACD_BEARISH")
-    if lado == 'sell' and macd_result.get('is_bullish'):
-        filtros_rotos.append("MACD_BULLISH")
-        
-    if lado == 'buy' and not vp_result.get('delta_positive'):
-        filtros_rotos.append("VP_DELTA_NEGATIVO")
-    if lado == 'sell' and vp_result.get('delta_positive'):
-        filtros_rotos.append("VP_DELTA_POSITIVO")
         
     if filtros_rotos:
         logger.warning(f"[MONITOR] {symbol}: FILTROS ROTOS → {filtros_rotos} | PnL: {pnl_pct:.2f}%")
@@ -613,14 +588,30 @@ def _evaluar_operacion_activa(symbol, posicion, precio_actual, adx_result, sqz_r
             core.cerrar_operacion_estrategia(symbol, f"ASEGURAR_GANANCIA (Filtros: {', '.join(filtros_rotos)})")
             return
             
-    # ── NIVEL 2: BONIFICACIONES Y AJUSTE SL ──
+    # ── NIVEL 2: PERDIDA DE MOMENTUM (Ajuste de SL a Breakeven) ──
+    # En lugar de cerrar el trade, si notamos debilidad, protegemos el capital.
     bonos_perdidos = []
     
-    if adx_result['adx'] > 20 and not (adx_result.get('cruce_long') or adx_result.get('cruce_short')):
-        bonos_perdidos.append("SIN_CRUCE_DI")
+    if adx_result['adx'] < 20:
+        bonos_perdidos.append("ADX_DEBIL")
         
-    if sqz_result['sqz_off'] and not sqz_result.get('momentum_accel'):
-        bonos_perdidos.append("SQZ_SIN_ACEL")
+    if lado == 'buy' and adx_result['dominio'] != 'BULL':
+        bonos_perdidos.append("DI_INVERTIDO")
+    if lado == 'sell' and adx_result['dominio'] != 'BEAR':
+        bonos_perdidos.append("DI_INVERTIDO")
+        
+    if sqz_result['sqz_on']:
+        bonos_perdidos.append("SQZ_COMPRESION")
+        
+    if lado == 'buy' and not macd_result.get('is_bullish'):
+        bonos_perdidos.append("MACD_BEARISH")
+    if lado == 'sell' and macd_result.get('is_bullish'):
+        bonos_perdidos.append("MACD_BULLISH")
+        
+    if lado == 'buy' and not vp_result.get('delta_positive'):
+        bonos_perdidos.append("VP_DELTA_NEGATIVO")
+    if lado == 'sell' and vp_result.get('delta_positive'):
+        bonos_perdidos.append("VP_DELTA_POSITIVO")
         
     # Si perdimos bonos y PnL > 1.5% precio (15% ROE), SL a Breakeven +0.2%
     if bonos_perdidos and pnl_pct >= 1.5:
