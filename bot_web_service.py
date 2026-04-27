@@ -671,12 +671,11 @@ def setup_telegram_webhook():
 # ==============================================================
 #  10. INICIO DEL SISTEMA (THREADING + MAIN)
 # ==============================================================
+bot_thread = threading.Thread(target=run_bot_loop, daemon=True)
+bot_thread.start()
+logger.info("🧵 Hilo del bot lanzado en background")
 
 if __name__ == '__main__':
-    bot_thread = threading.Thread(target=run_bot_loop, daemon=True)
-    bot_thread.start()
-    logger.info("🧵 Hilo del bot lanzado en background")
-    
     logger.info("🚀 Iniciando bot en Render.com (Modo Desarrollo)...")
     port = int(os.environ.get('PORT', 5000))
     logger.info(f"🌐 Flask escuchando en 0.0.0.0:{port}")
