@@ -438,7 +438,7 @@ def abrir_operacion(symbol, side, entrada, df, memoria, tendencia, fuerza):
         # ── PASO 4: Calcular SL y TP (Ratio 2:1 Estricto) ───────────────
         # SL fijo configurado (1.6%). TP exigido al doble del riesgo (3.2%)
         distancia_sl = entrada * STOP_FIJO
-        distancia_tp = distancia_sl * 2
+        distancia_tp = distancia_sl * 1.5  # TP 2.4% (ratio 1:1.5 — optimizado para Win Rate ~44%)
         
         sl = entrada - distancia_sl if side == 'buy' else entrada + distancia_sl
         tp = entrada + distancia_tp if side == 'buy' else entrada - distancia_tp
