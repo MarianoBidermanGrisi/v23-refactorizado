@@ -33,6 +33,7 @@ from supertrend_indicator import Supertrend
 from smc_indicator import SmartMoneyConcepts
 from williams_vix_fix import calcular_wvf
 from filtro_confluencia_historica import analizar_confluencia_historica
+from trendlines_indicator import TrendlinesBreaks
 
 
 # bot_web_service es el módulo padre que importa este archivo.
@@ -51,7 +52,7 @@ def _core():
 # ==============================================================
 
 # Símbolos a escanear (top por volumen)
-NUM_MONEDAS_ESCANEAR = 200
+NUM_MONEDAS_ESCANEAR = 50
 
 # Timeframe de análisis
 TIMEFRAME = "15m"
@@ -74,7 +75,12 @@ MAX_OPERACIONES = 5
 ADX_UMBRAL = 20
 
 # Umbral 9no Filtro: Movimiento máximo permitido desde el inicio de confluencia
-MOVIMIENTO_MAX_FILTRO_9 = 1.5
+# Subido a 1.2% para dar margen a la confirmación del Filtro 10 (Trendlines)
+MOVIMIENTO_MAX_FILTRO_9 = 1.2
+
+# Filtro de Confirmación SuperTrend: Mínimo de velas consecutivas en la misma dirección
+# antes de entrar. Evita entradas cuando el ST acaba de cambiar y puede regresar.
+ST_CONFIRMACION_BARRAS = 3
 
 # Estado de los indicadores por símbolo (se mantiene entre ciclos)
 _tdf_instances: Dict[str, TrendDurationForecast] = {}
@@ -82,6 +88,40 @@ _vp_instances: Dict[str, VolumeProfilePivots] = {}
 _macd_instances: Dict[str, MacdSupportResistance] = {}
 _st_instances: Dict[str, Supertrend] = {}
 _smc_instances: Dict[str, SmartMoneyConcepts] = {}
+_tl_instances: Dict[str, TrendlinesBreaks] = {}
+
+
+def _contar_barras_supertrend(ohlcv_confirmadas: list, st_ind) -> int:
+    """
+    Cuenta cuántas velas consecutivas lleva el SuperTrend en la misma
+    dirección que la vela más reciente.
+    Mínimo útil: 3 barras. Si retorna < ST_CONFIRMACION_BARRAS, la entrada se rechaza.
+    """
+    try:
+        # Necesitamos el historial de señales del ST para las últimas N velas
+        # Calculamos el ST sobre las últimas 20 velas para encontrar el cambio más reciente
+        ventana = min(20, len(ohlcv_confirmadas))
+        direccion_actual = None
+        barras_consecutivas = 0
+
+        for i in range(len(ohlcv_confirmadas) - ventana, len(ohlcv_confirmadas)):
+            resultado = st_ind.calcular(ohlcv_confirmadas[:i+1])
+            es_bullish = resultado['is_bullish']
+
+            if direccion_actual is None:
+                direccion_actual = es_bullish
+                barras_consecutivas = 1
+            elif es_bullish == direccion_actual:
+                barras_consecutivas += 1
+            else:
+                # Cambio de dirección: reiniciar contador
+                direccion_actual = es_bullish
+                barras_consecutivas = 1
+
+        return barras_consecutivas
+    except Exception:
+        # Si falla el cálculo, retornamos el mínimo para no bloquear
+        return ST_CONFIRMACION_BARRAS
 
 
 # ==============================================================
@@ -205,6 +245,10 @@ def _procesar_simbolo(symbol, memoria, exchange, abrir_operacion, posicion=None)
     st_ind = _st_instances[symbol]
     smc_ind = _smc_instances[symbol]
 
+    if symbol not in _tl_instances:
+        _tl_instances[symbol] = TrendlinesBreaks(length=10, mult=1.0)
+    tl_ind = _tl_instances[symbol]
+
     # 2. Descargar velas OHLCV (solo velas cerradas = confirmadas)
     ohlcv = exchange.fetch_ohlcv(symbol, timeframe=TIMEFRAME, limit=LIMIT_VELAS)
 
@@ -282,6 +326,13 @@ def _procesar_simbolo(symbol, memoria, exchange, abrir_operacion, posicion=None)
             f"| Complacencia={wvf_result['is_complacency']}"
         )
 
+    # Evaluar Trendlines with Breaks (10mo Filtro - LuxAlgo)
+    tl_result = tl_ind.update(ohlcv_confirmadas)
+    logger.info(
+        f"[TL-LUX] {symbol} | In_Up={tl_result['in_uptrend']} | In_Down={tl_result['in_downtrend']} "
+        f"| Break_Up={tl_result['upper_break']} | Break_Down={tl_result['lower_break']}"
+    )
+
     # ── NUEVO: GESTIÓN DE OPERACIONES ACTIVAS (Cierre Jerárquico) ──
     if posicion is not None:
         _evaluar_operacion_activa(
@@ -337,6 +388,18 @@ def _procesar_simbolo(symbol, memoria, exchange, abrir_operacion, posicion=None)
         if not st_result["is_bullish"]:
             logger.info(f"[Confluencia] BUY en {symbol} denegada: Supertrend es Bajista.")
             return
+        
+        # ── FILTRO DE CONFIRMACIÓN ST: Mínimo ST_CONFIRMACION_BARRAS velas alcistas ──
+        barras_st = _contar_barras_supertrend(ohlcv_confirmadas, st_ind)
+        if barras_st < ST_CONFIRMACION_BARRAS:
+            logger.info(f"[Confluencia] BUY en {symbol} denegada: ST recién girado alcista ({barras_st} barra/s < {ST_CONFIRMACION_BARRAS} requeridas). Esperando confirmación.")
+            return
+
+        # ── FILTRO 10: TRENDLINES WITH BREAKS (LuxAlgo) ──
+        # Filtro Duro: Bloquear si el precio está debajo de la línea de tendencia bajista (Upper)
+        if not tl_result['in_uptrend']:
+            logger.info(f"[Confluencia] BUY en {symbol} denegada: Precio bajo línea de tendencia bajista (LuxAlgo).")
+            return
 
         # ── BLOQUE SMC: 7mo Filtro de Confluencia y Localización (ANULADO) ──
         # if not is_bullish_struct:
@@ -350,6 +413,12 @@ def _procesar_simbolo(symbol, memoria, exchange, abrir_operacion, posicion=None)
         #         return
 
         tendencia += " + 7-X CONFIRMED"
+
+        # Bonus Filtro 10: Ruptura fresca de tendencia (LuxAlgo)
+        if tl_result['upper_break']:
+            confidence += 25
+            tendencia += " (TL Break 🚀)"
+
 
         # Bonus SQZMOM: Squeeze liberando con aceleración
         if sqz_result['sqz_off'] and sqz_result['momentum_accel']:
@@ -420,6 +489,18 @@ def _procesar_simbolo(symbol, memoria, exchange, abrir_operacion, posicion=None)
         if st_result["is_bullish"]:
             logger.info(f"[Confluencia] SELL en {symbol} denegada: Supertrend es Alcista.")
             return
+        
+        # ── FILTRO DE CONFIRMACIÓN ST: Mínimo ST_CONFIRMACION_BARRAS velas bajistas ──
+        barras_st = _contar_barras_supertrend(ohlcv_confirmadas, st_ind)
+        if barras_st < ST_CONFIRMACION_BARRAS:
+            logger.info(f"[Confluencia] SELL en {symbol} denegada: ST recién girado bajista ({barras_st} barra/s < {ST_CONFIRMACION_BARRAS} requeridas). Esperando confirmación.")
+            return
+
+        # ── FILTRO 10: TRENDLINES WITH BREAKS (LuxAlgo) ──
+        # Filtro Duro: Bloquear si el precio está sobre la línea de tendencia alcista (Lower)
+        if not tl_result['in_downtrend']:
+            logger.info(f"[Confluencia] SELL en {symbol} denegada: Precio sobre línea de tendencia alcista (LuxAlgo).")
+            return
 
         # ── BLOQUE SMC: 7mo Filtro de Confluencia y Localización (ANULADO) ──
         # if is_bullish_struct:
@@ -433,6 +514,12 @@ def _procesar_simbolo(symbol, memoria, exchange, abrir_operacion, posicion=None)
         #         return
 
         tendencia += " + 7-X CONFIRMED"
+
+        # Bonus Filtro 10: Ruptura fresca de tendencia (LuxAlgo)
+        if tl_result['lower_break']:
+            confidence += 25
+            tendencia += " (TL Break 📉)"
+
 
         # Bonus SQZMOM: Squeeze liberando con aceleración
         if sqz_result['sqz_off'] and sqz_result['momentum_accel']:
@@ -613,15 +700,17 @@ def _evaluar_operacion_activa(symbol, posicion, precio_actual, adx_result, sqz_r
     if lado == 'sell' and vp_result.get('delta_positive'):
         bonos_perdidos.append("VP_DELTA_POSITIVO")
         
-    # Si perdimos bonos y PnL > 1.5% precio (15% ROE), SL a Breakeven +0.2%
-    if bonos_perdidos and pnl_pct >= 1.5:
+    # Si perdimos bonos y PnL > 2.0% precio (20% ROE), SL a Breakeven +0.2%
+    # Ajustado para el nuevo TP de 3.0%
+    if bonos_perdidos and pnl_pct >= 2.0:
         logger.info(f"[MONITOR] {symbol}: Ajustando SL dinámico. Bonos perdidos: {bonos_perdidos}")
         nuevo_sl = entrada * 1.002 if lado == 'buy' else entrada * 0.998
         core.actualizar_sl_dinamico(symbol, nuevo_sl, lado, nivel="Nivel 2: Breakeven")
         
     # ── NIVEL 3: TRAILING AGRESIVO ──
-    # Si PnL > 2.5% precio (25% ROE, casi en TP de 3.2%), pegamos el SL a 0.5% del precio actual
-    if pnl_pct >= 2.5:
+    # Si PnL > 2.3% precio (23% ROE), pegamos el SL a 0.5% del precio actual
+    # Se activa antes del TP (3.0%) para asegurar ganancias máximas en el camino
+    if pnl_pct >= 2.3:
         distancia = precio_actual * 0.005
         nuevo_sl = precio_actual - distancia if lado == 'buy' else precio_actual + distancia
         core.actualizar_sl_dinamico(symbol, nuevo_sl, lado, nivel="Nivel 3: Trailing Agresivo")
