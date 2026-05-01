@@ -80,7 +80,7 @@ def crear_config_desde_entorno():
 # ==============================================================
 MARGEN_USDT      = 1        # Margen por operación en USDT
 PALANCA_ESTRICTA = 10       # Apalancamiento fijo (x10)
-STOP_FIJO        = 0.016    # 1.6% stop loss fijo
+STOP_FIJO        = 0.015    # 1.5% stop loss fijo (Riesgo asimétrico)
 COOLDOWN_OPERACION = 180    # Segundos mínimos entre operaciones
 MEMORIA_FILE     = 'memoria_bot.json'
 
@@ -438,7 +438,7 @@ def abrir_operacion(symbol, side, entrada, df, memoria, tendencia, fuerza):
         # ── PASO 4: Calcular SL y TP (Ratio 2:1 Estricto) ───────────────
         # SL fijo configurado (1.6%). TP exigido al doble del riesgo (3.2%)
         distancia_sl = entrada * STOP_FIJO
-        distancia_tp = distancia_sl * 1.5  # TP 2.4% (ratio 1:1.5 — optimizado para Win Rate ~44%)
+        distancia_tp = distancia_sl * 2.5  # TP 3.75% (ratio 1:2.5 - Asimétrico de alta rentabilidad)
         
         sl = entrada - distancia_sl if side == 'buy' else entrada + distancia_sl
         tp = entrada + distancia_tp if side == 'buy' else entrada - distancia_tp
@@ -524,7 +524,7 @@ def abrir_operacion(symbol, side, entrada, df, memoria, tendencia, fuerza):
             f"Par: `{symbol}`\n"
             f"Lado: `{side.upper()}`\n"
             f"Margen verificado: `{margen_verificado:.6f} USDT` (x{apalancamiento_verificado})\n"
-            f"Tendencia 15m: `{tendencia}`\n"
+            f"Tendencia 5m: `{tendencia}`\n"
             f"Fuerza señal: `{fuerza}/7`\n"
             f"SL: `{sl_str}` | TP: `{tp_str}`\n"
             f"_Posición abierta exitosamente_ ✅"
@@ -639,7 +639,7 @@ def setup_telegram_webhook():
     """
     token = os.environ.get('TELEGRAM_TOKEN')
     if not token:
-        logger.warning("⚠️ TELEGRAM_TOKEN no definido — webhook omitido")
+        logger.warning("TELEGRAM_TOKEN no definido — webhook omitido")
         return
 
     webhook_url = os.environ.get('WEBHOOK_URL')
@@ -671,11 +671,11 @@ def setup_telegram_webhook():
 # ==============================================================
 #  10. INICIO DEL SISTEMA (THREADING + MAIN)
 # ==============================================================
-bot_thread = threading.Thread(target=run_bot_loop, daemon=True)
-bot_thread.start()
-logger.info("🧵 Hilo del bot lanzado en background")
-
 if __name__ == '__main__':
+    logger.info("🧵 Lanzando hilo del bot en background...")
+    bot_thread = threading.Thread(target=run_bot_loop, daemon=True)
+    bot_thread.start()
+
     logger.info("🚀 Iniciando bot en Render.com (Modo Desarrollo)...")
     port = int(os.environ.get('PORT', 5000))
     logger.info(f"🌐 Flask escuchando en 0.0.0.0:{port}")
