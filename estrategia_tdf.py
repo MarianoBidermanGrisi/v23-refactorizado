@@ -26,7 +26,7 @@ logger = logging.getLogger(__name__)
 # ── Importar desde los módulos de indicadores ───────────────────────────
 from tdf_indicator import TrendDurationForecast
 from vp_pivots_indicator import VolumeProfilePivots
-from macd_sr_indicator import MacdSupportResistance
+from wavetrend_indicator import WaveTrendIndicator
 from adx_di_indicator import calcular_adx_di
 from sqz_momentum_indicator import calcular_squeeze_momentum
 from supertrend_indicator import Supertrend
@@ -34,8 +34,6 @@ from smc_indicator import SmartMoneyConcepts
 from williams_vix_fix import calcular_wvf
 from filtro_confluencia_historica import analizar_confluencia_historica
 from trendlines_indicator import TrendlinesBreaks
-
-
 # bot_web_service es el módulo padre que importa este archivo.
 # Se accede vía sys.modules para evitar el circular import.
 # Python ya tiene el módulo inicializado cuando escanear_mercado() se ejecuta.
@@ -52,13 +50,13 @@ def _core():
 # ==============================================================
 
 # Símbolos a escanear (top por volumen)
-NUM_MONEDAS_ESCANEAR = 50
+NUM_MONEDAS_ESCANEAR = 200
 
 # Timeframe de análisis
-TIMEFRAME = "15m"
+TIMEFRAME = "5m"
 
-# Cuántas velas descargar (300 mínimo para contextualizar VP y converge MACD EMA)
-LIMIT_VELAS = 300
+# Cuántas velas descargar (500 en 5m ≈ ~41 horas de contexto para VP y TDF)
+LIMIT_VELAS = 500
 
 # Parámetros del TDF (iguales al Pine Script original)
 TDF_LENGTH      = 50
@@ -66,13 +64,13 @@ TDF_SENSITIVITY = 3
 TDF_SAMPLES     = 10
 
 # Confianza mínima requerida para abrir operación (0-100)
-CONFIANZA_MIN = 60
+CONFIANZA_MIN = 50
 
 # Límite de operaciones simultáneas
 MAX_OPERACIONES = 5
 
 # Umbral ADX para considerar tendencia activa (4to filtro de confluencia)
-ADX_UMBRAL = 20
+ADX_UMBRAL = 25
 
 # Umbral 9no Filtro: Movimiento máximo permitido desde el inicio de confluencia
 # Subido a 1.2% para dar margen a la confirmación del Filtro 10 (Trendlines)
@@ -80,16 +78,15 @@ MOVIMIENTO_MAX_FILTRO_9 = 1.2
 
 # Filtro de Confirmación SuperTrend: Mínimo de velas consecutivas en la misma dirección
 # antes de entrar. Evita entradas cuando el ST acaba de cambiar y puede regresar.
-ST_CONFIRMACION_BARRAS = 3
+ST_CONFIRMACION_BARRAS = 2
 
 # Estado de los indicadores por símbolo (se mantiene entre ciclos)
 _tdf_instances: Dict[str, TrendDurationForecast] = {}
 _vp_instances: Dict[str, VolumeProfilePivots] = {}
-_macd_instances: Dict[str, MacdSupportResistance] = {}
+_wt_instances: Dict[str, WaveTrendIndicator] = {}
 _st_instances: Dict[str, Supertrend] = {}
 _smc_instances: Dict[str, SmartMoneyConcepts] = {}
-_tl_instances: Dict[str, TrendlinesBreaks] = {}
-
+_tl_instances:  Dict[str, TrendlinesBreaks]   = {}
 
 def _contar_barras_supertrend(ohlcv_confirmadas: list, st_ind) -> int:
     """
@@ -230,18 +227,14 @@ def _procesar_simbolo(symbol, memoria, exchange, abrir_operacion, posicion=None)
             pivot_length=10, 
             pivot_filter=20
         )
-        _macd_instances[symbol] = MacdSupportResistance(
-            fast_length=12,
-            slow_length=26,
-            signal_length=9
-        )
-        _st_instances[symbol] = Supertrend(period=10, multiplier=3.0)
+        _wt_instances[symbol] = WaveTrendIndicator(n1=10, n2=21)
+        _st_instances[symbol] = Supertrend(period=10, multiplier=4.0)
         _smc_instances[symbol] = SmartMoneyConcepts(pivot_length=10)
-        logger.info(f"[TDF-BOT] Instancias TDF, VP, MACD, ST y SMC creadas para {symbol}")
+        logger.info(f"[TDF-BOT] Instancias TDF, VP, WaveTrend, ST y SMC creadas para {symbol}")
 
     tdf = _tdf_instances[symbol]
     vp = _vp_instances[symbol]
-    macd_ind = _macd_instances[symbol]
+    wt_ind = _wt_instances[symbol]
     st_ind = _st_instances[symbol]
     smc_ind = _smc_instances[symbol]
 
@@ -288,8 +281,10 @@ def _procesar_simbolo(symbol, memoria, exchange, abrir_operacion, posicion=None)
     latest_ohlcv = np.array(ohlcv_confirmadas, dtype=float)
     vp_result = vp.update(latest_ohlcv)
     
-    # Evaluar MACD S/R (Confluencia de Momentum)
-    macd_result = macd_ind.update(latest_ohlcv)
+    # Evaluar WaveTrend (Confluencia de Momentum)
+    import pandas as pd
+    wt_df = pd.DataFrame(ohlcv_confirmadas, columns=["ts", "open", "high", "low", "close", "vol"])
+    wt_result = wt_ind.calculate(wt_df)
 
     # Evaluar ADX + DI (4to filtro de confluencia — Fuerza y Dirección de Tendencia)
     adx_result = calcular_adx_di(ohlcv_confirmadas, length=14, umbral=ADX_UMBRAL)
@@ -332,7 +327,6 @@ def _procesar_simbolo(symbol, memoria, exchange, abrir_operacion, posicion=None)
         f"[TL-LUX] {symbol} | In_Up={tl_result['in_uptrend']} | In_Down={tl_result['in_downtrend']} "
         f"| Break_Up={tl_result['upper_break']} | Break_Down={tl_result['lower_break']}"
     )
-
     # ── NUEVO: GESTIÓN DE OPERACIONES ACTIVAS (Cierre Jerárquico) ──
     if posicion is not None:
         _evaluar_operacion_activa(
@@ -342,7 +336,7 @@ def _procesar_simbolo(symbol, memoria, exchange, abrir_operacion, posicion=None)
             adx_result=adx_result,
             sqz_result=sqz_result,
             st_result=st_result,
-            macd_result=macd_result,
+            wt_result=wt_result,
             vp_result=vp_result,
             smc_result=smc_result,
             wvf_result=wvf_result
@@ -357,7 +351,7 @@ def _procesar_simbolo(symbol, memoria, exchange, abrir_operacion, posicion=None)
 
     vpc_delta_pos = vp_result["delta_positive"]
     vpc_poc = vp_result["poc_price"]
-    macd_bullish = macd_result["is_bullish"]
+    wt_bullish = wt_result["is_bullish"]
 
     if signal == 'BUY':
         # ── BLOQUE ADX: 4to Filtro de Confluencia ──
@@ -376,19 +370,19 @@ def _procesar_simbolo(symbol, memoria, exchange, abrir_operacion, posicion=None)
             logger.info(f"[Confluencia] BUY en {symbol} denegada: SQZMOM Histograma Negativo.")
             return
 
-        # Bloques de Cancelación Duros (VP + MACD)
+        # Bloques de Cancelación Duros (VP + WaveTrend)
         if not vpc_delta_pos:
             logger.info(f"[Confluencia] BUY en {symbol} denegada: VP Delta Negativo (Vendedores al mando).")
             return
-        if not macd_bullish:
-            logger.info(f"[Confluencia] BUY en {symbol} denegada: MACD es Bajista (Bajo Señal).")
+        if not wt_bullish:
+            logger.info(f"[Confluencia] BUY en {symbol} denegada: WaveTrend es Bajista (WT1 < WT2).")
             return
             
         # ── BLOQUE SUPERTREND: 6to Filtro de Confluencia ──
         if not st_result["is_bullish"]:
             logger.info(f"[Confluencia] BUY en {symbol} denegada: Supertrend es Bajista.")
             return
-        
+            
         # ── FILTRO DE CONFIRMACIÓN ST: Mínimo ST_CONFIRMACION_BARRAS velas alcistas ──
         barras_st = _contar_barras_supertrend(ohlcv_confirmadas, st_ind)
         if barras_st < ST_CONFIRMACION_BARRAS:
@@ -396,29 +390,27 @@ def _procesar_simbolo(symbol, memoria, exchange, abrir_operacion, posicion=None)
             return
 
         # ── FILTRO 10: TRENDLINES WITH BREAKS (LuxAlgo) ──
-        # Filtro Duro: Bloquear si el precio está debajo de la línea de tendencia bajista (Upper)
         if not tl_result['in_uptrend']:
-            logger.info(f"[Confluencia] BUY en {symbol} denegada: Precio bajo línea de tendencia bajista (LuxAlgo).")
+            logger.info(f"[Confluencia] BUY en {symbol} denegada: Precio bajo línea de resistencia (LuxAlgo).")
             return
 
-        # ── BLOQUE SMC: 7mo Filtro de Confluencia y Localización (ANULADO) ──
-        # if not is_bullish_struct:
-        #     logger.info(f"[Confluencia] BUY en {symbol} denegada: Estructura SMC es Bajista (esperando CHoCH).")
-        #     return
+        # ── BLOQUE SMC: 7mo Filtro de Confluencia y Localización ──
+        if not is_bullish_struct:
+            logger.info(f"[Confluencia] BUY en {symbol} denegada: Estructura SMC es Bajista (esperando CHoCH).")
+            return
             
-        # for ob in smc_result["bearish_obs"]:
-        #     distancia_al_ob = (ob['bottom'] - precio_actual) / precio_actual
-        #     if precio_actual <= ob['top'] and distancia_al_ob < 0.008:
-        #         logger.info(f"[Confluencia] BUY en {symbol} denegada: Muro institucional cercano (Bearish OB en {ob['bottom']:.4f}).")
-        #         return
+        for ob in smc_result["bearish_obs"]:
+            distancia_al_ob = (ob['bottom'] - precio_actual) / precio_actual
+            if precio_actual <= ob['top'] and distancia_al_ob < 0.008:
+                logger.info(f"[Confluencia] BUY en {symbol} denegada: Muro institucional cercano (Bearish OB en {ob['bottom']:.4f}).")
+                return
 
         tendencia += " + 7-X CONFIRMED"
 
-        # Bonus Filtro 10: Ruptura fresca de tendencia (LuxAlgo)
+        # Bonus Filtro 10: Ruptura fresca de trendline (LuxAlgo)
         if tl_result['upper_break']:
             confidence += 25
             tendencia += " (TL Break 🚀)"
-
 
         # Bonus SQZMOM: Squeeze liberando con aceleración
         if sqz_result['sqz_off'] and sqz_result['momentum_accel']:
@@ -449,11 +441,10 @@ def _procesar_simbolo(symbol, memoria, exchange, abrir_operacion, posicion=None)
                 logger.info(f"[Confluencia] BUY en {symbol} denegada: Precio bajo PoC y sin soporte VP cercano.")
                 return
                 
-        # Validación Extra MACD: Rebote en Soporte Dinámico (Opcional, suma mucha confianza)
-        near_macd_sup = any(abs(precio_actual - sup)/precio_actual < 0.005 for sup in macd_result["active_supports"])
-        if near_macd_sup:
+        # Validación Extra WaveTrend: Cruce al alza reciente (Opcional, suma mucha confianza)
+        if wt_result['cross_up']:
             confidence += 15
-            tendencia += " (Rebote MACD)"
+            tendencia += " (WT CrossUp 🟢)"
 
         # Bonus WVF: Pico de miedo/fondo detectado
         if wvf_result and wvf_result['is_bottom_signal']:
@@ -477,19 +468,19 @@ def _procesar_simbolo(symbol, memoria, exchange, abrir_operacion, posicion=None)
             logger.info(f"[Confluencia] SELL en {symbol} denegada: SQZMOM Histograma Positivo.")
             return
 
-        # Bloques de Cancelación Duros (VP + MACD)
+        # Bloques de Cancelación Duros (VP + WaveTrend)
         if vpc_delta_pos:
             logger.info(f"[Confluencia] SELL en {symbol} denegada: VP Delta Positivo (Compradores al mando).")
             return
-        if macd_bullish:
-            logger.info(f"[Confluencia] SELL en {symbol} denegada: MACD es Alcista (Sobre Señal).")
+        if wt_bullish:
+            logger.info(f"[Confluencia] SELL en {symbol} denegada: WaveTrend es Alcista (WT1 > WT2).")
             return
             
         # ── BLOQUE SUPERTREND: 6to Filtro de Confluencia ──
         if st_result["is_bullish"]:
             logger.info(f"[Confluencia] SELL en {symbol} denegada: Supertrend es Alcista.")
             return
-        
+            
         # ── FILTRO DE CONFIRMACIÓN ST: Mínimo ST_CONFIRMACION_BARRAS velas bajistas ──
         barras_st = _contar_barras_supertrend(ohlcv_confirmadas, st_ind)
         if barras_st < ST_CONFIRMACION_BARRAS:
@@ -497,29 +488,27 @@ def _procesar_simbolo(symbol, memoria, exchange, abrir_operacion, posicion=None)
             return
 
         # ── FILTRO 10: TRENDLINES WITH BREAKS (LuxAlgo) ──
-        # Filtro Duro: Bloquear si el precio está sobre la línea de tendencia alcista (Lower)
         if not tl_result['in_downtrend']:
-            logger.info(f"[Confluencia] SELL en {symbol} denegada: Precio sobre línea de tendencia alcista (LuxAlgo).")
+            logger.info(f"[Confluencia] SELL en {symbol} denegada: Precio sobre línea de soporte (LuxAlgo).")
             return
 
-        # ── BLOQUE SMC: 7mo Filtro de Confluencia y Localización (ANULADO) ──
-        # if is_bullish_struct:
-        #     logger.info(f"[Confluencia] SELL en {symbol} denegada: Estructura SMC es Alcista (esperando CHoCH).")
-        #     return
+        # ── BLOQUE SMC: 7mo Filtro de Confluencia y Localización ──
+        if is_bullish_struct:
+            logger.info(f"[Confluencia] SELL en {symbol} denegada: Estructura SMC es Alcista (esperando CHoCH).")
+            return
             
-        # for ob in smc_result["bullish_obs"]:
-        #     distancia_al_ob = (precio_actual - ob['top']) / precio_actual
-        #     if precio_actual >= ob['bottom'] and distancia_al_ob < 0.008:
-        #         logger.info(f"[Confluencia] SELL en {symbol} denegada: Muro institucional cercano (Bullish OB en {ob['top']:.4f}).")
-        #         return
+        for ob in smc_result["bullish_obs"]:
+            distancia_al_ob = (precio_actual - ob['top']) / precio_actual
+            if precio_actual >= ob['bottom'] and distancia_al_ob < 0.008:
+                logger.info(f"[Confluencia] SELL en {symbol} denegada: Muro institucional cercano (Bullish OB en {ob['top']:.4f}).")
+                return
 
         tendencia += " + 7-X CONFIRMED"
 
-        # Bonus Filtro 10: Ruptura fresca de tendencia (LuxAlgo)
+        # Bonus Filtro 10: Ruptura fresca de trendline (LuxAlgo)
         if tl_result['lower_break']:
             confidence += 25
             tendencia += " (TL Break 📉)"
-
 
         # Bonus SQZMOM: Squeeze liberando con aceleración
         if sqz_result['sqz_off'] and sqz_result['momentum_accel']:
@@ -550,11 +539,10 @@ def _procesar_simbolo(symbol, memoria, exchange, abrir_operacion, posicion=None)
                 logger.info(f"[Confluencia] SELL en {symbol} denegada: Precio sobre PoC y sin resistencia VP cercana.")
                 return
                 
-        # Validación Extra MACD
-        near_macd_res = any(abs(res - precio_actual)/precio_actual < 0.005 for res in macd_result["active_resistances"])
-        if near_macd_res:
+        # Validación Extra WaveTrend: Cruce a la baja reciente
+        if wt_result['cross_down']:
             confidence += 15
-            tendencia += " (Rechazo MACD)"
+            tendencia += " (WT CrossDown 🔴)"
 
         # ── BLOQUE WVF: 8vo Filtro de Complacencia para Shorts ──
         if wvf_result and not wvf_result['is_complacency']:
@@ -574,7 +562,7 @@ def _procesar_simbolo(symbol, memoria, exchange, abrir_operacion, posicion=None)
         "adx": adx_result,
         "sqz": sqz_result,
         "vp": vp_result,
-        "macd": macd_result,
+        "wt": wt_result,
         "st": st_result,
         "smc": smc_result,
         "wvf": wvf_result
@@ -628,7 +616,7 @@ def _procesar_simbolo(symbol, memoria, exchange, abrir_operacion, posicion=None)
         fuerza    = fuerza,
     )
 
-def _evaluar_operacion_activa(symbol, posicion, precio_actual, adx_result, sqz_result, st_result, macd_result, vp_result, smc_result, wvf_result):
+def _evaluar_operacion_activa(symbol, posicion, precio_actual, adx_result, sqz_result, st_result, wt_result, vp_result, smc_result, wvf_result):
     """
     Evaluación jerárquica de operaciones activas para Cierre Anticipado o Trailing SL.
     TP es 3.2% y SL es 1.6% (Unleveraged price %).
@@ -671,11 +659,10 @@ def _evaluar_operacion_activa(symbol, posicion, precio_actual, adx_result, sqz_r
             core.cerrar_operacion_estrategia(symbol, f"FILTROS_ROTOS: {', '.join(filtros_rotos)}")
             return
         else:
-            logger.info(f"[MONITOR] {symbol}: Estructura rota en ganancia. Cerrando para asegurar.")
-            core.cerrar_operacion_estrategia(symbol, f"ASEGURAR_GANANCIA (Filtros: {', '.join(filtros_rotos)})")
+            logger.info(f"[MONITOR] {symbol}: Filtros rotos pero en ganancia ({pnl_pct:.2f}%). Protegiendo con BE.")
+            nuevo_sl = entrada * 1.001 if lado == 'buy' else entrada * 0.999
+            core.actualizar_sl_dinamico(symbol, nuevo_sl, lado, nivel="BE por Filtros Rotos")
             return
-            
-    # ── NIVEL 2: PERDIDA DE MOMENTUM (Ajuste de SL a Breakeven) ──
     # En lugar de cerrar el trade, si notamos debilidad, protegemos el capital.
     bonos_perdidos = []
     
@@ -690,10 +677,10 @@ def _evaluar_operacion_activa(symbol, posicion, precio_actual, adx_result, sqz_r
     if sqz_result['sqz_on']:
         bonos_perdidos.append("SQZ_COMPRESION")
         
-    if lado == 'buy' and not macd_result.get('is_bullish'):
-        bonos_perdidos.append("MACD_BEARISH")
-    if lado == 'sell' and macd_result.get('is_bullish'):
-        bonos_perdidos.append("MACD_BULLISH")
+    if lado == 'buy' and not wt_result.get('is_bullish'):
+        bonos_perdidos.append("WT_BEARISH")
+    if lado == 'sell' and wt_result.get('is_bullish'):
+        bonos_perdidos.append("WT_BULLISH")
         
     if lado == 'buy' and not vp_result.get('delta_positive'):
         bonos_perdidos.append("VP_DELTA_NEGATIVO")
