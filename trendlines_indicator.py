@@ -1,142 +1,188 @@
-import pandas as pd
-import numpy as np
+"""
+Trendlines with Breaks [LuxAlgo]
+Traducción fiel del indicador Pine Script a Python stateful (con estado por símbolo).
+
+Lógica corregida:
+  - La pendiente se calcula entre DOS pivots consecutivos (no entre pivot y close).
+  - La línea se extiende desde el segundo pivot hasta la barra actual con esa pendiente.
+  - in_uptrend  = close > línea superior extendida (rompió la resistencia → alcista)
+  - in_downtrend = close < línea inferior extendida (rompió el soporte → bajista)
+
+Parámetros:
+    length  : Mitad de la ventana para detectar pivots (e.g. 10 → busca ±10 velas)
+    mult    : (reservado, para compatibilidad futura con bandas ATR)
+
+Salida (dict):
+    upper_break   : True si el precio acaba de romper la línea de resistencia
+    lower_break   : True si el precio acaba de romper la línea de soporte
+    in_uptrend    : True si close > línea de resistencia extendida
+    in_downtrend  : True si close < línea de soporte extendida
+    upper_line    : Valor numérico de la línea de resistencia en la barra actual
+    lower_line    : Valor numérico de la línea de soporte en la barra actual
+"""
+
 import logging
 
 logger = logging.getLogger(__name__)
 
+
 class TrendlinesBreaks:
     """
-    Traducción fiel del indicador 'Trendlines with Breaks [LuxAlgo]' de Pine Script a Python.
-    Identifica líneas de tendencia dinámicas basadas en pivots y detecta rupturas con slope de ATR.
+    Trendlines with Breaks [LuxAlgo] — implementación Python corregida.
+    Mantiene estado entre llamadas para simular el comportamiento bar-by-bar de TradingView.
     """
-    def __init__(self, length=10, mult=1.0):
+
+    def __init__(self, length: int = 14, mult: float = 1.0):
         self.length = length
-        self.mult = mult
-        
-        # Estado persistente
-        self.upper = None  # None = sin pivots establecidos todavía
-        self.lower = None  # None = sin pivots establecidos todavía
-        self.slope_ph = 0.0
-        self.slope_pl = 0.0
-        self.upos = 0
-        self.dnos = 0
+        self.mult   = mult
+
+        # Dos pivots de resistencia (para calcular pendiente real)
+        self._ph1_val = None   # pivot más antiguo
+        self._ph1_idx = None
+        self._ph2_val = None   # pivot más reciente
+        self._ph2_idx = None
+
+        # Dos pivots de soporte
+        self._pl1_val = None
+        self._pl1_idx = None
+        self._pl2_val = None
+        self._pl2_idx = None
+
+        # Contadores de ruptura (evento puntual = cambio de 0→1)
+        self.upos      = 0
+        self.dnos      = 0
         self.last_upos = 0
         self.last_dnos = 0
 
-    def _calcular_atr(self, df, length):
-        high = df['high']
-        low = df['low']
-        close = df['close']
-        
-        tr = pd.concat([
-            high - low,
-            (high - close.shift(1)).abs(),
-            (low - close.shift(1)).abs()
-        ], axis=1).max(axis=1)
-        
-        return tr.rolling(window=length).mean()
+    # ──────────────────────────────────────────────────────────
+    # Helpers
+    # ──────────────────────────────────────────────────────────
 
-    def update(self, ohlcv_confirmadas):
+    def _find_pivot_high(self, highs: list, idx: int) -> float | None:
+        """Retorna el valor si idx es un máximo pivot, de lo contrario None."""
+        left  = highs[max(0, idx - self.length): idx]
+        right = highs[idx + 1: min(len(highs), idx + 1 + self.length)]
+        val   = highs[idx]
+        if left and right and val >= max(left) and val >= max(right):
+            return val
+        return None
+
+    def _find_pivot_low(self, lows: list, idx: int) -> float | None:
+        """Retorna el valor si idx es un mínimo pivot, de lo contrario None."""
+        left  = lows[max(0, idx - self.length): idx]
+        right = lows[idx + 1: min(len(lows), idx + 1 + self.length)]
+        val   = lows[idx]
+        if left and right and val <= min(left) and val <= min(right):
+            return val
+        return None
+
+    def _line_at(self, val1: float, idx1: int, val2: float, idx2: int, current_idx: int) -> float:
+        """Extiende la línea definida por (idx1,val1)→(idx2,val2) hasta current_idx."""
+        if idx2 == idx1:
+            return val2
+        slope = (val2 - val1) / (idx2 - idx1)
+        return val2 + slope * (current_idx - idx2)
+
+    # ──────────────────────────────────────────────────────────
+    # API pública
+    # ──────────────────────────────────────────────────────────
+
+    def update(self, ohlcv: list) -> dict:
         """
-        Calcula el estado actual de las líneas de tendencia.
-        Retorna señales de ruptura y estado de tendencia.
+        Recibe la lista COMPLETA de velas OHLCV confirmadas y recalcula las líneas.
+        Cada elemento: [timestamp, open, high, low, close, volume]
         """
         try:
-            df = pd.DataFrame(ohlcv_confirmadas, columns=['ts', 'open', 'high', 'low', 'close', 'vol'])
-            n = len(df)
-            
-            # Necesitamos al menos length * 2 velas para detectar pivots
-            if n < self.length * 2 + 1:
-                return {
-                    "upper_break": False, 
-                    "lower_break": False, 
-                    "in_uptrend": False, 
-                    "in_downtrend": False,
-                    "upper_line": 0.0,
-                    "lower_line": 0.0
-                }
+            min_bars = self.length * 2 + 2
+            if not ohlcv or len(ohlcv) < min_bars:
+                return self._neutral()
 
-            # 1. Calcular Slope basado en ATR (Método LuxAlgo)
-            atr_series = self._calcular_atr(df, self.length)
-            atr_val = float(atr_series.iloc[-1])
-            slope = (atr_val / self.length) * self.mult
+            highs  = [c[2] for c in ohlcv]
+            lows   = [c[3] for c in ohlcv]
+            closes = [c[4] for c in ohlcv]
+            n      = len(ohlcv)
+            last   = n - 1
 
-            highs = df['high'].values
-            lows = df['low'].values
-            
-            # 2. Detección de Pivots (Confirmados con 'length' velas de retraso)
-            # Pine Script: ta.pivothigh(length, length)
-            ph = None
-            idx_ph = n - 1 - self.length
-            if highs[idx_ph] == max(highs[idx_ph - self.length : idx_ph + self.length + 1]):
-                ph = float(highs[idx_ph])
+            # ── Rastrear los dos pivots de resistencia más recientes ──
+            found_ph = 0
+            for i in range(last - 1, self.length - 1, -1):
+                if i + self.length >= n:
+                    continue
+                v = self._find_pivot_high(highs, i)
+                if v is not None:
+                    if found_ph == 0:
+                        self._ph2_val, self._ph2_idx = v, i
+                        found_ph = 1
+                    elif found_ph == 1:
+                        self._ph1_val, self._ph1_idx = v, i
+                        break
 
-            pl = None
-            idx_pl = n - 1 - self.length
-            if lows[idx_pl] == min(lows[idx_pl - self.length : idx_pl + self.length + 1]):
-                pl = float(lows[idx_pl])
+            # ── Rastrear los dos pivots de soporte más recientes ──
+            found_pl = 0
+            for i in range(last - 1, self.length - 1, -1):
+                if i + self.length >= n:
+                    continue
+                v = self._find_pivot_low(lows, i)
+                if v is not None:
+                    if found_pl == 0:
+                        self._pl2_val, self._pl2_idx = v, i
+                        found_pl = 1
+                    elif found_pl == 1:
+                        self._pl1_val, self._pl1_idx = v, i
+                        break
 
-            # 3. Actualizar Slopes y Líneas de Tendencia
-            # Upper Trendline (Resistencia)
-            if ph is not None:
-                self.slope_ph = slope
-                self.upper = ph
-            elif self.upper is not None:
-                self.upper -= self.slope_ph
-            # else: upper sigue en None hasta que haya un primer pivot
+            close_actual = closes[last]
 
-            # Lower Trendline (Soporte)
-            if pl is not None:
-                self.slope_pl = slope
-                self.lower = pl
-            elif self.lower is not None:
-                self.lower += self.slope_pl
-            # else: lower sigue en None hasta que haya un primer pivot
+            # ── Calcular líneas extendidas al bar actual ──
+            if self._ph2_val is not None and self._ph1_val is not None:
+                upper = self._line_at(
+                    self._ph1_val, self._ph1_idx,
+                    self._ph2_val, self._ph2_idx,
+                    last
+                )
+            elif self._ph2_val is not None:
+                # Solo un pivot: línea horizontal desde él
+                upper = self._ph2_val
+            else:
+                upper = max(highs[-self.length:])
 
-            # 4. Detectar Rupturas (Breakouts)
-            close_actual = float(df['close'].iloc[-1])
-            
-            # Guardar estado previo para detectar el cruce exacto
+            if self._pl2_val is not None and self._pl1_val is not None:
+                lower = self._line_at(
+                    self._pl1_val, self._pl1_idx,
+                    self._pl2_val, self._pl2_idx,
+                    last
+                )
+            elif self._pl2_val is not None:
+                lower = self._pl2_val
+            else:
+                lower = min(lows[-self.length:])
+
+            # ── Detección de ruptura (evento puntual) ──
             self.last_upos = self.upos
             self.last_dnos = self.dnos
 
-            # Si no hay pivots establecidos aún, retornar bloqueante (conservador)
-            if self.upper is None or self.lower is None:
-                return {
-                    "upper_break": False, 
-                    "lower_break": False, 
-                    "in_uptrend": False,   # Bloqueante hasta tener pivots reales
-                    "in_downtrend": False,
-                    "upper_line": 0.0,
-                    "lower_line": 0.0
-                }
-
-            # Lógica de tendencia: ¿estamos por encima de la línea de resistencia o por debajo del soporte?
-            if ph is not None:
-                self.upos = 0
-            elif close_actual > self.upper:
-                self.upos = 1
-                
-            if pl is not None:
-                self.dnos = 0
-            elif close_actual < self.lower:
-                self.dnos = 1
+            self.upos = 1 if close_actual > upper else 0
+            self.dnos = 1 if close_actual < lower  else 0
 
             return {
-                "upper_break": (self.upos > self.last_upos),
-                "lower_break": (self.dnos > self.last_dnos),
-                "in_uptrend": (close_actual > self.upper),
-                "in_downtrend": (close_actual < self.lower),
-                "upper_line": self.upper,
-                "lower_line": self.lower
+                "upper_break":  (self.upos == 1 and self.last_upos == 0),
+                "lower_break":  (self.dnos == 1 and self.last_dnos == 0),
+                "in_uptrend":   (close_actual > upper),
+                "in_downtrend": (close_actual < lower),
+                "upper_line":   upper,
+                "lower_line":   lower,
             }
+
         except Exception as e:
             logger.error(f"Error en TrendlinesBreaks: {e}")
-            return {
-                "upper_break": False, 
-                "lower_break": False, 
-                "in_uptrend": False, 
-                "in_downtrend": False,
-                "upper_line": 0.0,
-                "lower_line": 0.0
-            }
+            return self._neutral()
+
+    def _neutral(self) -> dict:
+        return {
+            "upper_break":  False,
+            "lower_break":  False,
+            "in_uptrend":   False,
+            "in_downtrend": False,
+            "upper_line":   0.0,
+            "lower_line":   0.0,
+        }
