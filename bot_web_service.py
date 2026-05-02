@@ -671,12 +671,13 @@ def setup_telegram_webhook():
 # ==============================================================
 #  10. INICIO DEL SISTEMA (THREADING + MAIN)
 # ==============================================================
-if __name__ == '__main__':
-    logger.info("🧵 Lanzando hilo del bot en background...")
-    bot_thread = threading.Thread(target=run_bot_loop, daemon=True)
-    bot_thread.start()
+# Iniciamos el hilo aquí para que funcione con Gunicorn en Render
+logger.info("🧵 Lanzando hilo del bot en background...")
+bot_thread = threading.Thread(target=run_bot_loop, daemon=True)
+bot_thread.start()
 
-    logger.info("🚀 Iniciando bot en Render.com (Modo Desarrollo)...")
+if __name__ == '__main__':
+    # Esto solo se ejecuta localmente con `python bot_web_service.py`
+    logger.info("🚀 Iniciando bot localmente...")
     port = int(os.environ.get('PORT', 5000))
-    logger.info(f"🌐 Flask escuchando en 0.0.0.0:{port}")
     app.run(debug=False, host='0.0.0.0', port=port)
