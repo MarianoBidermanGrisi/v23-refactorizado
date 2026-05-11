@@ -2,6 +2,7 @@ import sys, os, time, logging, requests, ccxt
 import pandas as pd
 import numpy as np
 from datetime import datetime
+import pandas_ta as ta
 
 # ==========================================================
 # 1. LOGGING
