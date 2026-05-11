@@ -1,4 +1,4 @@
-import sys, os, time, logging, requests, ccxt
+import sys, os, time, logging, requests, ccxt, gc
 import pandas as pd
 import numpy as np
 from datetime import datetime
@@ -469,6 +469,9 @@ if __name__ == "__main__":
 
                 except Exception as e:
                     log.error(f"⚠️ Error en {symbol}: {e}"); continue
+                finally:
+                    # Limpieza agresiva de memoria para entornos con poca RAM (Render)
+                    gc.collect()
 
             time.sleep(60)
 
