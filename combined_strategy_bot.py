@@ -209,16 +209,26 @@ def generate_signals(df):
         trend_short = ema_short and st_short and macd_short and zl_down
 
         # ---- GATILLOS ----
-        # ZL Pullback
+        # 1. DIY Bot: SuperTrend Flip con Signal Expiry (3 velas)
+        st_buy = False
+        st_sell = False
+        for j in range(i - DIY_EXPIRY + 1, i + 1):
+            if df['ST_dir'].iloc[j] == 1 and df['ST_dir'].iloc[j-1] == -1:
+                st_buy = True
+            if df['ST_dir'].iloc[j] == -1 and df['ST_dir'].iloc[j-1] == 1:
+                st_sell = True
+
+        # 2. ZL Pullback
         zl_buy  = df['close'].iloc[i] > df['ZLEMA'].iloc[i] and df['close'].iloc[i-1] <= df['ZLEMA'].iloc[i-1]
         zl_sell = df['close'].iloc[i] < df['ZLEMA'].iloc[i] and df['close'].iloc[i-1] >= df['ZLEMA'].iloc[i-1]
-        # Two-Pole crossover
+        
+        # 3. Two-Pole crossover
         tp_buy  = df['Two_P'].iloc[i] > df['Two_PP'].iloc[i] and df['Two_P'].iloc[i-1] <= df['Two_PP'].iloc[i-1] and df['Two_P'].iloc[i] < 0
         tp_sell = df['Two_P'].iloc[i] < df['Two_PP'].iloc[i] and df['Two_P'].iloc[i-1] >= df['Two_PP'].iloc[i-1] and df['Two_P'].iloc[i] > 0
 
-        if trend_long  and (zl_buy  or tp_buy):
+        if trend_long  and (zl_buy  or tp_buy  or st_buy):
             df.at[df.index[i], 'Master_Buy']  = True
-        if trend_short and (zl_sell or tp_sell):
+        if trend_short and (zl_sell or tp_sell or st_sell):
             df.at[df.index[i], 'Master_Sell'] = True
 
     return df
@@ -269,18 +279,39 @@ def manage_open_positions():
             except Exception as e:
                 log.error(f"⚠️ Error tiempo máx {symbol}: {e}")
 
-            # --- CÁLCULO ATR DINÁMICO PARA GESTIÓN ---
+            # --- CÁLCULO ATR E INDICADORES PARA GESTIÓN ---
             try:
-                # Obtenemos suficientes velas para el "warm-up" del RMA del ATR
-                ohlcv = exchange.fetch_ohlcv(symbol, timeframe=TIMEFRAME, limit=100)
-                df_atr = pd.DataFrame(ohlcv, columns=['timestamp','open','high','low','close','volume'])
-                current_atr = ta.atr(df_atr['high'], df_atr['low'], df_atr['close'], length=14).iloc[-1]
+                # Obtenemos suficientes velas para el "warm-up" de indicadores
+                ohlcv = exchange.fetch_ohlcv(symbol, timeframe=TIMEFRAME, limit=300)
+                df_ind = pd.DataFrame(ohlcv, columns=['timestamp','open','high','low','close','volume'])
+                current_atr = ta.atr(df_ind['high'], df_ind['low'], df_ind['close'], length=14).iloc[-1]
+                
+                # --- EARLY EXIT (Cierre Anticipado) ---
+                df_ind['ZLEMA'] = calc_zlema(df_ind['close'], ZL_LENGTH)
+                df_ind['Two_P'], df_ind['Two_PP'] = calc_two_pole(df_ind['close'], TP_FILTER_LEN)
+                last_candle = df_ind.iloc[-1]
+                
+                early_exit = False
+                if side == 'long':
+                    zlema_broken = last_candle['close'] < last_candle['ZLEMA']
+                    tp_bear = last_candle['Two_P'] < last_candle['Two_PP']
+                    if zlema_broken and tp_bear: early_exit = True
+                else:
+                    zlema_broken = last_candle['close'] > last_candle['ZLEMA']
+                    tp_bull = last_candle['Two_P'] > last_candle['Two_PP']
+                    if zlema_broken and tp_bull: early_exit = True
+                
+                if early_exit:
+                    log.info(f"🚨 EARLY EXIT activado para {symbol}. Estructura rota.")
+                    if close_position(symbol, side, "Early Exit (ZLEMA+TwoPole)"):
+                        send_telegram(f"🚨 *{symbol} CERRADA (Early Exit)*\nMotivo: ZLEMA roto + Two-Pole invertido\nPnL: {profit_pct*100:.2f}%")
+                    continue
                 
                 # Porcentaje dinámico basado en ATR vs precio de entrada
                 dynamic_be_trigger = (current_atr * 1.5) / entry   # BE a 1.5 ATR de distancia
                 dynamic_trail_dist = (current_atr * 1.0) / PEAK_PRICES[symbol]    # Trailing a 1.0 ATR detrás del pico
             except Exception as e:
-                log.warning(f"⚠️ {symbol} Fallo al calcular ATR en gestión. Usando fallback estático. {e}")
+                log.warning(f"⚠️ {symbol} Fallo al calcular ATR/Indicadores en gestión. Usando fallback estático. {e}")
                 dynamic_be_trigger = BE_TRIGGER_PCT
                 dynamic_trail_dist = TRAILING_DIST_PCT
 
