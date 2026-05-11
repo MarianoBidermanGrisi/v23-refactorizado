@@ -278,7 +278,7 @@ def manage_open_positions():
                 
                 # Porcentaje dinámico basado en ATR vs precio de entrada
                 dynamic_be_trigger = (current_atr * 1.5) / entry   # BE a 1.5 ATR de distancia
-                dynamic_trail_dist = (current_atr * 1.0) / peak    # Trailing a 1.0 ATR detrás del pico
+                dynamic_trail_dist = (current_atr * 1.0) / PEAK_PRICES[symbol]    # Trailing a 1.0 ATR detrás del pico
             except Exception as e:
                 log.warning(f"⚠️ {symbol} Fallo al calcular ATR en gestión. Usando fallback estático. {e}")
                 dynamic_be_trigger = BE_TRIGGER_PCT
