@@ -1,8 +1,9 @@
 ccxt
 pandas
+pandas-ta
 numpy<2.0.0
 requests
 flask
+gunicorn
 matplotlib
 mplfinance==0.12.10b0
-gunicorn
