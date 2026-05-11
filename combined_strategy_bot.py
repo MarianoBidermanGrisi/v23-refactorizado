@@ -86,7 +86,8 @@ def send_telegram(msg: str):
     try:
         url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
         requests.post(url, data={"chat_id": TELEGRAM_CHAT_ID, "text": msg, "parse_mode": "Markdown"}, timeout=10)
-    except: pass
+    except Exception as e:
+        log.warning(f"⚠️ Error enviando mensaje de Telegram: {e}")
 
 def update_stop_loss(symbol, side, new_sl):
     try:
@@ -180,14 +181,19 @@ def generate_signals(df):
     """
     df['Master_Buy']  = False
     df['Master_Sell'] = False
-    zl_trend = 0
+    
+    # --- Estado de Tendencia ZL ---
+    # Persistimos el último cruce de bandas mediante forward-fill
+    cross_up = (df['close'] > df['ZL_Upper']) & (df['close'].shift(1) <= df['ZL_Upper'].shift(1))
+    cross_down = (df['close'] < df['ZL_Lower']) & (df['close'].shift(1) >= df['ZL_Lower'].shift(1))
+    
+    df['zl_trend_state'] = np.nan
+    df.loc[cross_up, 'zl_trend_state'] = 1
+    df.loc[cross_down, 'zl_trend_state'] = -1
+    df['zl_trend_state'] = df['zl_trend_state'].ffill().fillna(0)
 
     for i in range(DIY_EXPIRY + 1, len(df)):
-        # Actualizar ZL trend
-        if df['close'].iloc[i] > df['ZL_Upper'].iloc[i] and df['close'].iloc[i-1] <= df['ZL_Upper'].iloc[i-1]:
-            zl_trend = 1
-        elif df['close'].iloc[i] < df['ZL_Lower'].iloc[i] and df['close'].iloc[i-1] >= df['ZL_Lower'].iloc[i-1]:
-            zl_trend = -1
+        zl_trend = df['zl_trend_state'].iloc[i]
 
         # ---- FILTROS DE TENDENCIA ----
         ema_long  = df['close'].iloc[i] > df['EMA_200'].iloc[i]
@@ -263,24 +269,41 @@ def manage_open_positions():
             except Exception as e:
                 log.error(f"⚠️ Error tiempo máx {symbol}: {e}")
 
+            # --- CÁLCULO ATR DINÁMICO PARA GESTIÓN ---
+            try:
+                # Obtenemos suficientes velas para el "warm-up" del RMA del ATR
+                ohlcv = exchange.fetch_ohlcv(symbol, timeframe=TIMEFRAME, limit=100)
+                df_atr = pd.DataFrame(ohlcv, columns=['timestamp','open','high','low','close','volume'])
+                current_atr = ta.atr(df_atr['high'], df_atr['low'], df_atr['close'], length=14).iloc[-1]
+                
+                # Porcentaje dinámico basado en ATR vs precio de entrada
+                dynamic_be_trigger = (current_atr * 1.5) / entry   # BE a 1.5 ATR de distancia
+                dynamic_trail_dist = (current_atr * 1.0) / peak    # Trailing a 1.0 ATR detrás del pico
+            except Exception as e:
+                log.warning(f"⚠️ {symbol} Fallo al calcular ATR en gestión. Usando fallback estático. {e}")
+                dynamic_be_trigger = BE_TRIGGER_PCT
+                dynamic_trail_dist = TRAILING_DIST_PCT
+
             # --- REGLA: BREAKEVEN ---
-            if profit_pct >= BE_TRIGGER_PCT and ALERTS_HISTORY.get(symbol) != 'BE':
+            if profit_pct >= dynamic_be_trigger and ALERTS_HISTORY.get(symbol) != 'BE':
                 if update_stop_loss(symbol, side, entry):
-                    send_telegram(f"🛡️ *{symbol} BREAKEVEN activado*")
+                    send_telegram(f"🛡️ *{symbol} BREAKEVEN activado*\nDistancia cruzada: `{dynamic_be_trigger*100:.2f}%` (1.5 ATR)")
                     ALERTS_HISTORY[symbol] = 'BE'
 
             # --- REGLA: TRAILING STOP ---
             if ALERTS_HISTORY.get(symbol) == 'BE':
                 peak = PEAK_PRICES[symbol]
-                trail_sl = peak * (1 - TRAILING_DIST_PCT) if side == 'long' else peak * (1 + TRAILING_DIST_PCT)
+                trail_sl = peak * (1 - dynamic_trail_dist) if side == 'long' else peak * (1 + dynamic_trail_dist)
+                
                 last_trail = ALERTS_HISTORY.get(f"{symbol}_trail", 0 if side == 'long' else 999999)
                 moved = (side == 'long'  and trail_sl > last_trail * 1.001) or \
                         (side == 'short' and trail_sl < last_trail * 0.999)
                 valid = (side == 'long'  and trail_sl > entry * 1.001) or \
                         (side == 'short' and trail_sl < entry * 0.999)
+                        
                 if moved and valid:
                     if update_stop_loss(symbol, side, trail_sl):
-                        send_telegram(f"📈 *{symbol} TRAILING* SL → {trail_sl:.4f}")
+                        send_telegram(f"📈 *{symbol} TRAILING*\nSL → `{trail_sl:.4f}`\nDistancia Trail: `{dynamic_trail_dist*100:.2f}%` (1.0 ATR)")
                         ALERTS_HISTORY[f"{symbol}_trail"] = trail_sl
 
     except Exception as e:
@@ -311,7 +334,7 @@ if __name__ == "__main__":
             # Posiciones activas
             positions = exchange.fetch_positions()
             busy_symbols = {p['symbol'] for p in positions if float(p['contracts']) > 0}
-            SESSION_ACTIVE_SYMBOLS.update(busy_symbols)
+            SESSION_ACTIVE_SYMBOLS = set(busy_symbols)
             log.info(f"🔄 [{now.strftime('%H:%M:%S')}] Balance: {balance:.2f} USDT | Abiertas: {len(busy_symbols)}/{MAX_OPEN_POSITIONS}")
 
             if len(busy_symbols) >= MAX_OPEN_POSITIONS:
@@ -334,7 +357,7 @@ if __name__ == "__main__":
                 try:
                     ohlcv = exchange.fetch_ohlcv(symbol, timeframe=TIMEFRAME, limit=500)
                     df = pd.DataFrame(ohlcv, columns=['timestamp','open','high','low','close','volume'])
-                    if len(df) < 250: continue
+                    if len(df) < 300: continue
 
                     df = calculate_all_indicators(df)
                     df = generate_signals(df)
@@ -388,6 +411,10 @@ if __name__ == "__main__":
                     pos_value  = (balance * RISK_PERCENT) * LEVERAGE
                     raw_qty    = pos_value / price
                     qty        = (raw_qty // step) * step
+
+                    if qty <= 0:
+                        log.warning(f"⚠️ {symbol} RECHAZADA: Cantidad calculada ({qty}) es menor que el mínimo permitido ({step})")
+                        continue
 
                     # ---- Abrir posición ----
                     params = {
