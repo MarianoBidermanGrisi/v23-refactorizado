@@ -1,0 +1,417 @@
+import sys, os, time, logging, requests, ccxt
+import pandas as pd
+import numpy as np
+from datetime import datetime
+
+# ==========================================================
+# 1. LOGGING
+# ==========================================================
+LOG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "combined_bot.log")
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    handlers=[
+        logging.FileHandler(LOG_FILE, encoding="utf-8"),
+        logging.StreamHandler()
+    ]
+)
+log = logging.getLogger(__name__)
+
+# Memoria de sesión
+ALERTS_HISTORY         = {}
+PEAK_PRICES            = {}
+COOLDOWNS              = {}
+SESSION_ACTIVE_SYMBOLS = set()
+
+# ==========================================================
+# 2. CREDENCIALES Y PARÁMETROS
+# ==========================================================
+API_KEY    = os.environ.get('BITGET_API_KEY')
+SECRET_KEY = os.environ.get('BITGET_SECRET_KEY')
+PASSPHRASE = os.environ.get('BITGET_PASSPHRASE')
+
+TELEGRAM_TOKEN   = os.environ.get('TELEGRAM_TOKEN')
+TELEGRAM_CHAT_ID = os.environ.get('TELEGRAM_CHAT_ID')
+
+# --- Timeframe y posiciones ---
+TIMEFRAME          = '15m'
+MAX_OPEN_POSITIONS = 4
+RISK_PERCENT       = 0.07
+LEVERAGE           = 10.0
+
+# --- Gestión de riesgo ---
+BE_TRIGGER_PCT    = 0.015   # Activar Breakeven al 1.5%
+TRAILING_DIST_PCT = 0.019   # Trailing Stop 1.9%
+MAX_POSITION_AGE_HOURS = 6.0
+
+# --- Filtros de calidad ---
+MAX_SL_DISTANCE_PCT   = 0.035
+MIN_TP_DISTANCE_PCT   = 0.020
+MIN_RISK_REWARD_RATIO = 1.8
+
+# --- Parámetros de indicadores ---
+# DIY Bot
+DIY_ST_LENGTH = 10
+DIY_ST_MULT   = 3.0
+DIY_EMA_LEN   = 200
+DIY_MACD_FAST = 12
+DIY_MACD_SLOW = 26
+DIY_MACD_SIG  = 9
+DIY_EXPIRY    = 3   # Signal Expiry candles
+
+# Zero Lag
+ZL_LENGTH = 70
+ZL_MULT   = 1.2
+
+# Two-Pole Oscillator
+TP_FILTER_LEN = 15
+
+# ==========================================================
+# 3. CONEXIÓN A BITGET
+# ==========================================================
+try:
+    exchange = ccxt.bitget({
+        'apiKey': API_KEY, 'secret': SECRET_KEY, 'password': PASSPHRASE,
+        'enableRateLimit': True, 'options': {'defaultType': 'swap'}
+    })
+    log.info("✅ Conexión a Bitget exitosa.")
+except Exception as e:
+    log.critical(f"❌ Error conectando a Bitget: {e}"); sys.exit(1)
+
+# ==========================================================
+# 4. FUNCIONES AUXILIARES
+# ==========================================================
+def send_telegram(msg: str):
+    try:
+        url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+        requests.post(url, data={"chat_id": TELEGRAM_CHAT_ID, "text": msg, "parse_mode": "Markdown"}, timeout=10)
+    except: pass
+
+def update_stop_loss(symbol, side, new_sl):
+    try:
+        clean = symbol.split(':')[0].replace('/', '')
+        params = {
+            'symbol': clean, 'marginCoin': 'USDT', 'productType': 'USDT-FUTURES',
+            'planType': 'pos_loss',
+            'stopLossTriggerPrice': str(exchange.price_to_precision(symbol, new_sl)),
+            'stopLossTriggerType': 'fill_price',
+            'holdSide': 'long' if side == 'long' else 'short'
+        }
+        exchange.private_mix_post_v2_mix_order_place_pos_tpsl(params)
+        return True
+    except Exception as e:
+        log.error(f"❌ Error actualizando SL {symbol}: {e}"); return False
+
+def close_position(symbol, side, reason=""):
+    try:
+        clean = symbol.split(':')[0].replace('/', '')
+        exchange.private_mix_post_v2_mix_order_close_positions({
+            'symbol': clean, 'productType': 'USDT-FUTURES',
+            'marginCoin': 'USDT', 'holdSide': side
+        })
+        log.info(f"🔒 {symbol} cerrada. Motivo: {reason}")
+        return True
+    except Exception as e:
+        log.error(f"❌ Error cerrando {symbol}: {e}"); return False
+
+# ==========================================================
+# 5. CÁLCULO DE INDICADORES
+# ==========================================================
+def calc_zlema(close, length=70):
+    lag = int((length - 1) / 2)
+    src = close + (close - close.shift(lag))
+    return src.ewm(span=length, adjust=False).mean()
+
+def calc_zl_bands(df, length=70, mult=1.2):
+    # Usamos el atr de pandas_ta para mayor precisión
+    atr = ta.atr(df['high'], df['low'], df['close'], length=length)
+    highest_atr = atr.rolling(window=length * 3).max()
+    volatility = highest_atr * mult
+    zlema = calc_zlema(df['close'], length)
+    return zlema, zlema + volatility, zlema - volatility
+
+def calc_two_pole(close, filter_length=15):
+    sma1 = close.rolling(25).mean()
+    diff = close - sma1
+    sma_diff = diff.rolling(25).mean()
+    std_diff = diff.rolling(25).std().replace(0, 1e-10)
+    normalized = (diff - sma_diff) / std_diff
+    smooth1 = normalized.ewm(span=filter_length, adjust=False).mean()
+    smooth2 = smooth1.ewm(span=filter_length, adjust=False).mean()
+    return smooth2, smooth2.shift(4)
+
+def calculate_all_indicators(df):
+    """Calcula los 3 sistemas de indicadores sobre el dataframe."""
+    close = df['close']
+
+    # --- DIY Bot ---
+    # Supertrend de pandas_ta
+    st = ta.supertrend(high=df['high'], low=df['low'], close=df['close'], length=DIY_ST_LENGTH, multiplier=DIY_ST_MULT)
+    # Extraemos la columna de dirección (1 alcista, -1 bajista) dinámica
+    st_dir_col = [col for col in st.columns if col.startswith('SUPERTd_')][0]
+    df['ST_dir'] = st[st_dir_col]
+    
+    df['EMA_200'] = ta.ema(close, length=DIY_EMA_LEN)
+    
+    # MACD de pandas_ta
+    macd = ta.macd(close, fast=DIY_MACD_FAST, slow=DIY_MACD_SLOW, signal=DIY_MACD_SIG)
+    macd_col = [col for col in macd.columns if col.startswith('MACD_')][0]
+    macd_sig_col = [col for col in macd.columns if col.startswith('MACDs_')][0]
+    df['MACD'] = macd[macd_col]
+    df['MACD_sig'] = macd[macd_sig_col]
+
+    # --- Zero Lag ---
+    df['ZLEMA'], df['ZL_Upper'], df['ZL_Lower'] = calc_zl_bands(df, ZL_LENGTH, ZL_MULT)
+
+    # --- Two-Pole ---
+    df['Two_P'], df['Two_PP'] = calc_two_pole(close, TP_FILTER_LEN)
+
+    return df.dropna()
+
+# ==========================================================
+# 6. GENERACIÓN DE SEÑALES COMBINADAS
+# ==========================================================
+def generate_signals(df):
+    """
+    Confluencia Triple:
+    TENDENCIA (EMA200 + SuperTrend + ZL Trend) → GATILLO (ZL Pullback OR Two-Pole crossover)
+    Signal Expiry: busca SuperTrend flip en las últimas DIY_EXPIRY velas.
+    """
+    df['Master_Buy']  = False
+    df['Master_Sell'] = False
+    zl_trend = 0
+
+    for i in range(DIY_EXPIRY + 1, len(df)):
+        # Actualizar ZL trend
+        if df['close'].iloc[i] > df['ZL_Upper'].iloc[i] and df['close'].iloc[i-1] <= df['ZL_Upper'].iloc[i-1]:
+            zl_trend = 1
+        elif df['close'].iloc[i] < df['ZL_Lower'].iloc[i] and df['close'].iloc[i-1] >= df['ZL_Lower'].iloc[i-1]:
+            zl_trend = -1
+
+        # ---- FILTROS DE TENDENCIA ----
+        ema_long  = df['close'].iloc[i] > df['EMA_200'].iloc[i]
+        ema_short = df['close'].iloc[i] < df['EMA_200'].iloc[i]
+        st_long   = df['ST_dir'].iloc[i] == 1
+        st_short  = df['ST_dir'].iloc[i] == -1
+        macd_long  = df['MACD'].iloc[i] > df['MACD_sig'].iloc[i]
+        macd_short = df['MACD'].iloc[i] < df['MACD_sig'].iloc[i]
+        zl_up   = zl_trend == 1
+        zl_down = zl_trend == -1
+
+        trend_long  = ema_long  and st_long  and macd_long  and zl_up
+        trend_short = ema_short and st_short and macd_short and zl_down
+
+        # ---- GATILLOS ----
+        # ZL Pullback
+        zl_buy  = df['close'].iloc[i] > df['ZLEMA'].iloc[i] and df['close'].iloc[i-1] <= df['ZLEMA'].iloc[i-1]
+        zl_sell = df['close'].iloc[i] < df['ZLEMA'].iloc[i] and df['close'].iloc[i-1] >= df['ZLEMA'].iloc[i-1]
+        # Two-Pole crossover
+        tp_buy  = df['Two_P'].iloc[i] > df['Two_PP'].iloc[i] and df['Two_P'].iloc[i-1] <= df['Two_PP'].iloc[i-1] and df['Two_P'].iloc[i] < 0
+        tp_sell = df['Two_P'].iloc[i] < df['Two_PP'].iloc[i] and df['Two_P'].iloc[i-1] >= df['Two_PP'].iloc[i-1] and df['Two_P'].iloc[i] > 0
+
+        if trend_long  and (zl_buy  or tp_buy):
+            df.at[df.index[i], 'Master_Buy']  = True
+        if trend_short and (zl_sell or tp_sell):
+            df.at[df.index[i], 'Master_Sell'] = True
+
+    return df
+
+# ==========================================================
+# 7. GESTIÓN DE POSICIONES ABIERTAS (Escudo Pro)
+# ==========================================================
+def manage_open_positions():
+    global ALERTS_HISTORY, PEAK_PRICES, COOLDOWNS
+    try:
+        positions = exchange.fetch_positions()
+        active_symbols = {p['symbol'] for p in positions if float(p['contracts']) > 0}
+
+        # Limpiar posiciones cerradas
+        for sym in list(PEAK_PRICES.keys()):
+            if sym not in active_symbols:
+                COOLDOWNS[sym] = time.time() + 3600
+                log.info(f"⏳ {sym} cerrada. Cooldown 1h activado.")
+                del PEAK_PRICES[sym]
+                if sym in ALERTS_HISTORY: del ALERTS_HISTORY[sym]
+                SESSION_ACTIVE_SYMBOLS.discard(sym)
+
+        for pos in positions:
+            symbol = pos['symbol']
+            side   = pos['side']
+            if float(pos['contracts']) == 0: continue
+
+            entry = float(pos['entryPrice'])
+            mark  = float(pos['markPrice'])
+            profit_pct = (mark - entry) / entry if side == 'long' else (entry - mark) / entry
+
+            # Actualizar pico
+            if symbol not in PEAK_PRICES:
+                PEAK_PRICES[symbol] = mark
+            else:
+                PEAK_PRICES[symbol] = max(PEAK_PRICES[symbol], mark) if side == 'long' else min(PEAK_PRICES[symbol], mark)
+
+            # --- REGLA: CIERRE POR TIEMPO MÁXIMO ---
+            try:
+                open_ms = float(pos.get('timestamp') or pos['info'].get('cTime') or 0)
+                if open_ms > 0:
+                    age_h = (time.time() - open_ms / 1000) / 3600
+                    if age_h >= MAX_POSITION_AGE_HOURS:
+                        log.info(f"⏰ {symbol}: {age_h:.1f}h >= {MAX_POSITION_AGE_HOURS}h — cierre por tiempo.")
+                        if close_position(symbol, side, "Tiempo máximo"):
+                            send_telegram(f"⏰ *{symbol} CERRADA (Tiempo)*\nEdad: {age_h:.1f}h | PnL: {profit_pct*100:.2f}%")
+                        continue
+            except Exception as e:
+                log.error(f"⚠️ Error tiempo máx {symbol}: {e}")
+
+            # --- REGLA: BREAKEVEN ---
+            if profit_pct >= BE_TRIGGER_PCT and ALERTS_HISTORY.get(symbol) != 'BE':
+                if update_stop_loss(symbol, side, entry):
+                    send_telegram(f"🛡️ *{symbol} BREAKEVEN activado*")
+                    ALERTS_HISTORY[symbol] = 'BE'
+
+            # --- REGLA: TRAILING STOP ---
+            if ALERTS_HISTORY.get(symbol) == 'BE':
+                peak = PEAK_PRICES[symbol]
+                trail_sl = peak * (1 - TRAILING_DIST_PCT) if side == 'long' else peak * (1 + TRAILING_DIST_PCT)
+                last_trail = ALERTS_HISTORY.get(f"{symbol}_trail", 0 if side == 'long' else 999999)
+                moved = (side == 'long'  and trail_sl > last_trail * 1.001) or \
+                        (side == 'short' and trail_sl < last_trail * 0.999)
+                valid = (side == 'long'  and trail_sl > entry * 1.001) or \
+                        (side == 'short' and trail_sl < entry * 0.999)
+                if moved and valid:
+                    if update_stop_loss(symbol, side, trail_sl):
+                        send_telegram(f"📈 *{symbol} TRAILING* SL → {trail_sl:.4f}")
+                        ALERTS_HISTORY[f"{symbol}_trail"] = trail_sl
+
+    except Exception as e:
+        log.error(f"❌ Error en manage_open_positions: {e}")
+
+# ==========================================================
+# 8. BUCLE PRINCIPAL
+# ==========================================================
+if __name__ == "__main__":
+    log.info("🚀 Combined Strategy Bot iniciado.")
+    last_report_day = datetime.now().day
+
+    while True:
+        try:
+            now = datetime.now()
+            if now.hour == 0 and now.day != last_report_day:
+                send_telegram("📊 *REPORTE DIARIO*"); last_report_day = now.day
+
+            # Gestionar posiciones abiertas
+            manage_open_positions()
+
+            # Balance
+            try:
+                balance = float(exchange.fetch_balance()['total'].get('USDT', 0))
+            except Exception as e:
+                log.error(f"Error balance: {e}"); balance = 0.0
+
+            # Posiciones activas
+            positions = exchange.fetch_positions()
+            busy_symbols = {p['symbol'] for p in positions if float(p['contracts']) > 0}
+            SESSION_ACTIVE_SYMBOLS.update(busy_symbols)
+            log.info(f"🔄 [{now.strftime('%H:%M:%S')}] Balance: {balance:.2f} USDT | Abiertas: {len(busy_symbols)}/{MAX_OPEN_POSITIONS}")
+
+            if len(busy_symbols) >= MAX_OPEN_POSITIONS:
+                time.sleep(60); continue
+
+            # Top 100 por volumen
+            tickers = exchange.fetch_tickers()
+            top_100 = [p[0] for p in sorted(
+                [(s, float(t.get('quoteVolume', 0))) for s, t in tickers.items() if s.endswith('/USDT:USDT')],
+                key=lambda x: x[1], reverse=True
+            )[:100]]
+
+            for symbol in top_100:
+                if symbol in busy_symbols or len(busy_symbols) >= MAX_OPEN_POSITIONS: continue
+                if symbol in COOLDOWNS:
+                    if time.time() < COOLDOWNS[symbol]: continue
+                    else: del COOLDOWNS[symbol]
+                if symbol in SESSION_ACTIVE_SYMBOLS: continue
+
+                try:
+                    ohlcv = exchange.fetch_ohlcv(symbol, timeframe=TIMEFRAME, limit=500)
+                    df = pd.DataFrame(ohlcv, columns=['timestamp','open','high','low','close','volume'])
+                    if len(df) < 250: continue
+
+                    df = calculate_all_indicators(df)
+                    df = generate_signals(df)
+
+                    last = df.iloc[-1]
+                    price = last['close']
+
+                    buy  = bool(last['Master_Buy'])
+                    sell = bool(last['Master_Sell'])
+
+                    if not (buy or sell): continue
+
+                    # ---- Anti-recompra ----
+                    try:
+                        chk = exchange.fetch_position(symbol)
+                        if float(chk.get('contracts', 0)) > 0:
+                            SESSION_ACTIVE_SYMBOLS.add(symbol); continue
+                    except: pass
+
+                    side_order = 'buy' if buy else 'sell'
+
+                    # ---- SL / TP dinámico (2% fallback, RR 1:2) ----
+                    atr_val = ta.atr(df['high'], df['low'], df['close'], length=14).iloc[-1]
+                    if buy:
+                        sl = price - atr_val * 1.5
+                        tp = price + atr_val * 3.0
+                    else:
+                        sl = price + atr_val * 1.5
+                        tp = price - atr_val * 3.0
+
+                    sl_pct = abs(price - sl) / price
+                    tp_pct = abs(price - tp) / price
+
+                    # ---- REGLA 1: SL > TP → rechazar ----
+                    if sl_pct >= tp_pct:
+                        log.warning(f"⚠️ {symbol} RECHAZADA: SL% >= TP%"); continue
+                    # ---- REGLA 2: SL demasiado lejos ----
+                    if sl_pct > MAX_SL_DISTANCE_PCT:
+                        log.warning(f"⚠️ {symbol} RECHAZADA: SL {sl_pct*100:.2f}% > {MAX_SL_DISTANCE_PCT*100:.1f}%"); continue
+                    # ---- REGLA 3: TP demasiado cerca ----
+                    if tp_pct < MIN_TP_DISTANCE_PCT:
+                        log.warning(f"⚠️ {symbol} RECHAZADA: TP {tp_pct*100:.2f}% < {MIN_TP_DISTANCE_PCT*100:.1f}%"); continue
+                    # ---- R/R mínimo ----
+                    rr = tp_pct / sl_pct if sl_pct > 0 else 0
+                    if rr < MIN_RISK_REWARD_RATIO:
+                        log.warning(f"⚠️ {symbol} RECHAZADA: R/R {rr:.2f} < {MIN_RISK_REWARD_RATIO}"); continue
+
+                    # ---- Cálculo de cantidad ----
+                    market     = exchange.market(symbol)
+                    step       = market['limits']['amount']['min'] or 1e-8
+                    pos_value  = (balance * RISK_PERCENT) * LEVERAGE
+                    raw_qty    = pos_value / price
+                    qty        = (raw_qty // step) * step
+
+                    # ---- Abrir posición ----
+                    params = {
+                        'marginCoin': 'USDT', 'marginMode': 'isolated', 'tradeSide': 'open',
+                        'presetStopSurplusPrice': str(exchange.price_to_precision(symbol, tp)),
+                        'presetStopLossPrice':    str(exchange.price_to_precision(symbol, sl))
+                    }
+                    exchange.set_leverage(int(LEVERAGE), symbol)
+                    exchange.create_order(symbol, 'market', side_order, qty, params=params)
+
+                    log.info(f"✅ {symbol} {side_order.upper()} | Entrada: {price:.4f} | SL: {sl:.4f} | TP: {tp:.4f}")
+                    send_telegram(
+                        f"🚀 *{symbol} {side_order.upper()}*\n"
+                        f"Entrada: `{exchange.price_to_precision(symbol, price)}`\n"
+                        f"🛑 SL: `{exchange.price_to_precision(symbol, sl)}`\n"
+                        f"🎯 TP: `{exchange.price_to_precision(symbol, tp)}`\n"
+                        f"R/R: `{rr:.2f}` | EMA200✅ | ST✅ | ZL✅ | MACD✅"
+                    )
+                    busy_symbols.add(symbol)
+                    SESSION_ACTIVE_SYMBOLS.add(symbol)
+
+                except Exception as e:
+                    log.error(f"⚠️ Error en {symbol}: {e}"); continue
+
+            time.sleep(60)
+
+        except Exception as e:
+            log.error(f"❌ Error ciclo principal: {e}"); time.sleep(60)
