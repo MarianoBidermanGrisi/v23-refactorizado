@@ -246,7 +246,18 @@ def manage_open_positions():
         for sym in list(PEAK_PRICES.keys()):
             if sym not in active_symbols:
                 COOLDOWNS[sym] = time.time() + 3600
-                log.info(f"⏳ {sym} cerrada. Cooldown 1h activado.")
+                log.info(f"⏳ {sym} cerrada en el exchange. Cooldown 1h activado.")
+                
+                # Determinar si fue cierre en ganancia o pérdida basándonos en si llegó a Breakeven
+                status = ALERTS_HISTORY.get(sym)
+                if status == 'CLOSED_BY_BOT':
+                    # Si el bot ya lo cerró activamente (Early Exit o Tiempo), ya envió mensaje.
+                    pass
+                elif status == 'BE':
+                    send_telegram(f"💰 *{sym} CERRADA*\nLa posición tocó el Take Profit, el Trailing Stop, o cerró en Breakeven (Riesgo Cero).\n⏳ Cooldown de 1 hora activado.")
+                else:
+                    send_telegram(f"📉 *{sym} CERRADA*\nLa posición tocó el Stop Loss original o fue cerrada manualmente.\n⏳ Cooldown de 1 hora activado.")
+                
                 del PEAK_PRICES[sym]
                 if sym in ALERTS_HISTORY: del ALERTS_HISTORY[sym]
                 SESSION_ACTIVE_SYMBOLS.discard(sym)
@@ -275,6 +286,7 @@ def manage_open_positions():
                         log.info(f"⏰ {symbol}: {age_h:.1f}h >= {MAX_POSITION_AGE_HOURS}h — cierre por tiempo.")
                         if close_position(symbol, side, "Tiempo máximo"):
                             send_telegram(f"⏰ *{symbol} CERRADA (Tiempo)*\nEdad: {age_h:.1f}h | PnL: {profit_pct*100:.2f}%")
+                            ALERTS_HISTORY[symbol] = 'CLOSED_BY_BOT'
                         continue
             except Exception as e:
                 log.error(f"⚠️ Error tiempo máx {symbol}: {e}")
@@ -305,6 +317,7 @@ def manage_open_positions():
                     log.info(f"🚨 EARLY EXIT activado para {symbol}. Estructura rota.")
                     if close_position(symbol, side, "Early Exit (ZLEMA+TwoPole)"):
                         send_telegram(f"🚨 *{symbol} CERRADA (Early Exit)*\nMotivo: ZLEMA roto + Two-Pole invertido\nPnL: {profit_pct*100:.2f}%")
+                        ALERTS_HISTORY[symbol] = 'CLOSED_BY_BOT'
                     continue
                 
                 # Porcentaje dinámico basado en ATR vs precio de entrada
