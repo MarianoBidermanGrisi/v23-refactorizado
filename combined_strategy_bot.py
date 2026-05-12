@@ -245,18 +245,24 @@ def manage_open_positions():
         # Limpiar posiciones cerradas
         for sym in list(PEAK_PRICES.keys()):
             if sym not in active_symbols:
-                COOLDOWNS[sym] = time.time() + 3600
-                log.info(f"⏳ {sym} cerrada en el exchange. Cooldown 1h activado.")
-                
-                # Determinar si fue cierre en ganancia o pérdida basándonos en si llegó a Breakeven
+                # PRIORIDAD 3: Cooldown diferenciado — 4h si perdió, 1h si ganó/BE
                 status = ALERTS_HISTORY.get(sym)
                 if status == 'CLOSED_BY_BOT':
-                    # Si el bot ya lo cerró activamente (Early Exit o Tiempo), ya envió mensaje.
-                    pass
+                    # El bot ya cerró activamente (Early Exit o Tiempo).
+                    # Cooldown extendido porque puede haber sido una pérdida.
+                    COOLDOWNS[sym] = time.time() + 14400  # 4 horas
+                    log.info(f"⏳ {sym} cerrada por bot. Cooldown 4h activado.")
+                    # El mensaje ya fue enviado en el momento del cierre activo.
                 elif status == 'BE':
+                    # Llegó a Breakeven → probablemente ganó o salió en cero
+                    COOLDOWNS[sym] = time.time() + 3600  # 1 hora
+                    log.info(f"⏳ {sym} cerrada (BE/TP/Trail). Cooldown 1h activado.")
                     send_telegram(f"💰 *{sym} CERRADA*\nLa posición tocó el Take Profit, el Trailing Stop, o cerró en Breakeven (Riesgo Cero).\n⏳ Cooldown de 1 hora activado.")
                 else:
-                    send_telegram(f"📉 *{sym} CERRADA*\nLa posición tocó el Stop Loss original o fue cerrada manualmente.\n⏳ Cooldown de 1 hora activado.")
+                    # Stop Loss original o cierre manual → perdió
+                    COOLDOWNS[sym] = time.time() + 14400  # 4 horas
+                    log.info(f"⏳ {sym} cerrada en SL. Cooldown 4h activado.")
+                    send_telegram(f"📉 *{sym} CERRADA*\nLa posición tocó el Stop Loss original o fue cerrada manualmente.\n⏳ Cooldown de 4 horas activado.")
                 
                 del PEAK_PRICES[sym]
                 if sym in ALERTS_HISTORY: del ALERTS_HISTORY[sym]
@@ -299,24 +305,35 @@ def manage_open_positions():
                 current_atr = ta.atr(df_ind['high'], df_ind['low'], df_ind['close'], length=14).iloc[-1]
                 
                 # --- EARLY EXIT (Cierre Anticipado) ---
+                # PRIORIDAD 1: Requiere 2 velas consecutivas confirmando la ruptura
+                # y que ya exista una pérdida mínima del 0.5% para evitar falsos positivos por ruido.
                 df_ind['ZLEMA'] = calc_zlema(df_ind['close'], ZL_LENGTH)
                 df_ind['Two_P'], df_ind['Two_PP'] = calc_two_pole(df_ind['close'], TP_FILTER_LEN)
-                last_candle = df_ind.iloc[-1]
+                c1 = df_ind.iloc[-1]   # Vela más reciente
+                c2 = df_ind.iloc[-2]   # Vela anterior (confirmación)
                 
                 early_exit = False
                 if side == 'long':
-                    zlema_broken = last_candle['close'] < last_candle['ZLEMA']
-                    tp_bear = last_candle['Two_P'] < last_candle['Two_PP']
-                    if zlema_broken and tp_bear: early_exit = True
+                    # Ambas velas deben estar por debajo de la ZLEMA
+                    zlema_broken = (c1['close'] < c1['ZLEMA']) and (c2['close'] < c2['ZLEMA'])
+                    # Ambas velas deben confirmar giro bajista en Two-Pole
+                    tp_bear = (c1['Two_P'] < c1['Two_PP']) and (c2['Two_P'] < c2['Two_PP'])
+                    # Solo actuar si la posición ya tiene pérdida mínima (evita cierres instantáneos)
+                    if zlema_broken and tp_bear and profit_pct < -0.005:
+                        early_exit = True
                 else:
-                    zlema_broken = last_candle['close'] > last_candle['ZLEMA']
-                    tp_bull = last_candle['Two_P'] > last_candle['Two_PP']
-                    if zlema_broken and tp_bull: early_exit = True
+                    # Ambas velas deben estar por encima de la ZLEMA
+                    zlema_broken = (c1['close'] > c1['ZLEMA']) and (c2['close'] > c2['ZLEMA'])
+                    # Ambas velas deben confirmar giro alcista en Two-Pole
+                    tp_bull = (c1['Two_P'] > c1['Two_PP']) and (c2['Two_P'] > c2['Two_PP'])
+                    # Solo actuar si la posición ya tiene pérdida mínima (evita cierres instantáneos)
+                    if zlema_broken and tp_bull and profit_pct < -0.005:
+                        early_exit = True
                 
                 if early_exit:
-                    log.info(f"🚨 EARLY EXIT activado para {symbol}. Estructura rota.")
-                    if close_position(symbol, side, "Early Exit (ZLEMA+TwoPole)"):
-                        send_telegram(f"🚨 *{symbol} CERRADA (Early Exit)*\nMotivo: ZLEMA roto + Two-Pole invertido\nPnL: {profit_pct*100:.2f}%")
+                    log.info(f"🚨 EARLY EXIT activado para {symbol}. 2 velas confirmadas. PnL: {profit_pct*100:.2f}%")
+                    if close_position(symbol, side, "Early Exit (ZLEMA+TwoPole x2)"):
+                        send_telegram(f"🚨 *{symbol} CERRADA (Early Exit)*\nMotivo: ZLEMA roto + Two-Pole invertido (2 velas confirmadas)\nPnL: {profit_pct*100:.2f}%")
                         ALERTS_HISTORY[symbol] = 'CLOSED_BY_BOT'
                     continue
                 
@@ -384,14 +401,14 @@ if __name__ == "__main__":
             if len(busy_symbols) >= MAX_OPEN_POSITIONS:
                 time.sleep(60); continue
 
-            # Top 60 por volumen
+            # Top 100 por volumen
             tickers = exchange.fetch_tickers()
-            top_60 = [p[0] for p in sorted(
+            top_100 = [p[0] for p in sorted(
                 [(s, float(t.get('quoteVolume', 0))) for s, t in tickers.items() if s.endswith('/USDT:USDT')],
                 key=lambda x: x[1], reverse=True
-            )[:60]]
+            )[:100]]
 
-            for symbol in top_60:
+            for symbol in top_100:
                 if symbol in busy_symbols or len(busy_symbols) >= MAX_OPEN_POSITIONS: continue
                 if symbol in COOLDOWNS:
                     if time.time() < COOLDOWNS[symbol]: continue
@@ -407,12 +424,20 @@ if __name__ == "__main__":
                     df = generate_signals(df)
 
                     last = df.iloc[-1]
-                    price = last['close']
 
                     buy  = bool(last['Master_Buy'])
                     sell = bool(last['Master_Sell'])
 
                     if not (buy or sell): continue
+
+                    # PRIORIDAD 2: Usar precio live del mercado para SL/TP
+                    # Evita que el SL quede dentro del rango actual de precio
+                    # por slippage/gap entre cierre de vela y ejecución de orden.
+                    try:
+                        ticker_live = exchange.fetch_ticker(symbol)
+                        price = float(ticker_live['last'])
+                    except Exception:
+                        price = float(last['close'])  # Fallback al cierre de vela si falla
 
                     # ---- Anti-recompra ----
                     try:
