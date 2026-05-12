@@ -384,14 +384,14 @@ if __name__ == "__main__":
             if len(busy_symbols) >= MAX_OPEN_POSITIONS:
                 time.sleep(60); continue
 
-            # Top 100 por volumen
+            # Top 60 por volumen
             tickers = exchange.fetch_tickers()
-            top_100 = [p[0] for p in sorted(
+            top_60 = [p[0] for p in sorted(
                 [(s, float(t.get('quoteVolume', 0))) for s, t in tickers.items() if s.endswith('/USDT:USDT')],
                 key=lambda x: x[1], reverse=True
-            )[:100]]
+            )[:60]]
 
-            for symbol in top_100:
+            for symbol in top_60:
                 if symbol in busy_symbols or len(busy_symbols) >= MAX_OPEN_POSITIONS: continue
                 if symbol in COOLDOWNS:
                     if time.time() < COOLDOWNS[symbol]: continue
