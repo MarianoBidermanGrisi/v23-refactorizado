@@ -305,35 +305,28 @@ def manage_open_positions():
                 current_atr = ta.atr(df_ind['high'], df_ind['low'], df_ind['close'], length=14).iloc[-1]
                 
                 # --- EARLY EXIT (Cierre Anticipado) ---
-                # PRIORIDAD 1: Requiere 2 velas consecutivas confirmando la ruptura
-                # y que ya exista una pérdida mínima del 0.5% para evitar falsos positivos por ruido.
                 df_ind['ZLEMA'] = calc_zlema(df_ind['close'], ZL_LENGTH)
                 df_ind['Two_P'], df_ind['Two_PP'] = calc_two_pole(df_ind['close'], TP_FILTER_LEN)
                 c1 = df_ind.iloc[-1]   # Vela más reciente
-                c2 = df_ind.iloc[-2]   # Vela anterior (confirmación)
                 
                 early_exit = False
                 if side == 'long':
-                    # Ambas velas deben estar por debajo de la ZLEMA
-                    zlema_broken = (c1['close'] < c1['ZLEMA']) and (c2['close'] < c2['ZLEMA'])
-                    # Ambas velas deben confirmar giro bajista en Two-Pole
-                    tp_bear = (c1['Two_P'] < c1['Two_PP']) and (c2['Two_P'] < c2['Two_PP'])
-                    # Solo actuar si la posición ya tiene pérdida mínima (evita cierres instantáneos)
+                    zlema_broken = c1['close'] < c1['ZLEMA']
+                    tp_bear = c1['Two_P'] < c1['Two_PP']
+                    # Actuar en 1 sola vela, pero exigiendo pérdida mínima
                     if zlema_broken and tp_bear and profit_pct < -0.005:
                         early_exit = True
                 else:
-                    # Ambas velas deben estar por encima de la ZLEMA
-                    zlema_broken = (c1['close'] > c1['ZLEMA']) and (c2['close'] > c2['ZLEMA'])
-                    # Ambas velas deben confirmar giro alcista en Two-Pole
-                    tp_bull = (c1['Two_P'] > c1['Two_PP']) and (c2['Two_P'] > c2['Two_PP'])
-                    # Solo actuar si la posición ya tiene pérdida mínima (evita cierres instantáneos)
+                    zlema_broken = c1['close'] > c1['ZLEMA']
+                    tp_bull = c1['Two_P'] > c1['Two_PP']
+                    # Actuar en 1 sola vela, pero exigiendo pérdida mínima
                     if zlema_broken and tp_bull and profit_pct < -0.005:
                         early_exit = True
                 
                 if early_exit:
-                    log.info(f"🚨 EARLY EXIT activado para {symbol}. 2 velas confirmadas. PnL: {profit_pct*100:.2f}%")
-                    if close_position(symbol, side, "Early Exit (ZLEMA+TwoPole x2)"):
-                        send_telegram(f"🚨 *{symbol} CERRADA (Early Exit)*\nMotivo: ZLEMA roto + Two-Pole invertido (2 velas confirmadas)\nPnL: {profit_pct*100:.2f}%")
+                    log.info(f"🚨 EARLY EXIT activado para {symbol}. 1 vela. PnL: {profit_pct*100:.2f}%")
+                    if close_position(symbol, side, "Early Exit (ZLEMA+TwoPole)"):
+                        send_telegram(f"🚨 *{symbol} CERRADA (Early Exit)*\nMotivo: ZLEMA roto + Two-Pole invertido (1 vela)\nPnL: {profit_pct*100:.2f}%")
                         ALERTS_HISTORY[symbol] = 'CLOSED_BY_BOT'
                     continue
                 
