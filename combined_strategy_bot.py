@@ -23,6 +23,7 @@ ALERTS_HISTORY         = {}
 PEAK_PRICES            = {}
 COOLDOWNS              = {}
 SESSION_ACTIVE_SYMBOLS = set()
+LAST_KNOWN_PNL         = {}  # Último profit_pct conocido por símbolo (para detectar TP vs SL al cierre)
 
 # ==========================================================
 # 2. CREDENCIALES Y PARÁMETROS
@@ -247,25 +248,28 @@ def manage_open_positions():
             if sym not in active_symbols:
                 # PRIORIDAD 3: Cooldown diferenciado — 4h si perdió, 1h si ganó/BE
                 status = ALERTS_HISTORY.get(sym)
+                last_pnl = LAST_KNOWN_PNL.get(sym, None)
+
                 if status == 'CLOSED_BY_BOT':
                     # El bot ya cerró activamente (Early Exit o Tiempo).
                     # Cooldown extendido porque puede haber sido una pérdida.
                     COOLDOWNS[sym] = time.time() + 14400  # 4 horas
                     log.info(f"⏳ {sym} cerrada por bot. Cooldown 4h activado.")
                     # El mensaje ya fue enviado en el momento del cierre activo.
-                elif status == 'BE':
-                    # Llegó a Breakeven → probablemente ganó o salió en cero
+                elif status == 'BE' or (last_pnl is not None and last_pnl > 0):
+                    # BE activado O el último PnL conocido fue positivo → ganó (TP del exchange)
                     COOLDOWNS[sym] = time.time() + 3600  # 1 hora
-                    log.info(f"⏳ {sym} cerrada (BE/TP/Trail). Cooldown 1h activado.")
+                    log.info(f"⏳ {sym} cerrada (BE/TP/Trail). Cooldown 1h activado. PnL final: {last_pnl*100:.2f}%" if last_pnl is not None else f"⏳ {sym} cerrada (BE/TP/Trail). Cooldown 1h activado.")
                     send_telegram(f"💰 *{sym} CERRADA*\nLa posición tocó el Take Profit, el Trailing Stop, o cerró en Breakeven (Riesgo Cero).\n⏳ Cooldown de 1 hora activado.")
                 else:
                     # Stop Loss original o cierre manual → perdió
                     COOLDOWNS[sym] = time.time() + 14400  # 4 horas
-                    log.info(f"⏳ {sym} cerrada en SL. Cooldown 4h activado.")
+                    log.info(f"⏳ {sym} cerrada en SL. Cooldown 4h activado. PnL final: {last_pnl*100:.2f}%" if last_pnl is not None else f"⏳ {sym} cerrada en SL. Cooldown 4h activado.")
                     send_telegram(f"📉 *{sym} CERRADA*\nLa posición tocó el Stop Loss original o fue cerrada manualmente.\n⏳ Cooldown de 4 horas activado.")
-                
+
                 del PEAK_PRICES[sym]
                 if sym in ALERTS_HISTORY: del ALERTS_HISTORY[sym]
+                if sym in LAST_KNOWN_PNL: del LAST_KNOWN_PNL[sym]
                 SESSION_ACTIVE_SYMBOLS.discard(sym)
 
         for pos in positions:
@@ -276,6 +280,9 @@ def manage_open_positions():
             entry = float(pos['entryPrice'])
             mark  = float(pos['markPrice'])
             profit_pct = (mark - entry) / entry if side == 'long' else (entry - mark) / entry
+
+            # Guardar último PnL conocido para detectar TP vs SL en el cierre del exchange
+            LAST_KNOWN_PNL[symbol] = profit_pct
 
             # Actualizar pico
             if symbol not in PEAK_PRICES:
