@@ -314,19 +314,20 @@ def manage_open_positions():
                 # --- EARLY EXIT (Cierre Anticipado) ---
                 df_ind['ZLEMA'] = calc_zlema(df_ind['close'], ZL_LENGTH)
                 df_ind['Two_P'], df_ind['Two_PP'] = calc_two_pole(df_ind['close'], TP_FILTER_LEN)
-                c1 = df_ind.iloc[-1]   # Vela más reciente
+                c_closed = df_ind.iloc[-2]  # Última vela cerrada
+                c_live   = df_ind.iloc[-1]  # Vela actual en formación
                 
                 early_exit = False
                 if side == 'long':
-                    zlema_broken = c1['close'] < c1['ZLEMA']
-                    tp_bear = c1['Two_P'] < c1['Two_PP']
-                    # Actuar en 1 sola vela, pero exigiendo pérdida mínima
+                    # Multi-vela: Exigir que la vela CERRADA ya muestre la ruptura, y la viva lo confirme
+                    zlema_broken = c_closed['close'] < c_closed['ZLEMA'] and c_live['close'] < c_live['ZLEMA']
+                    tp_bear = c_closed['Two_P'] < c_closed['Two_PP'] and c_live['Two_P'] < c_live['Two_PP']
                     if zlema_broken and tp_bear and profit_pct < -0.005:
                         early_exit = True
                 else:
-                    zlema_broken = c1['close'] > c1['ZLEMA']
-                    tp_bull = c1['Two_P'] > c1['Two_PP']
-                    # Actuar en 1 sola vela, pero exigiendo pérdida mínima
+                    # Multi-vela: Exigir que la vela CERRADA ya muestre la ruptura, y la viva lo confirme
+                    zlema_broken = c_closed['close'] > c_closed['ZLEMA'] and c_live['close'] > c_live['ZLEMA']
+                    tp_bull = c_closed['Two_P'] > c_closed['Two_PP'] and c_live['Two_P'] > c_live['Two_PP']
                     if zlema_broken and tp_bull and profit_pct < -0.005:
                         early_exit = True
                 
@@ -423,10 +424,11 @@ if __name__ == "__main__":
                     df = calculate_all_indicators(df)
                     df = generate_signals(df)
 
-                    last = df.iloc[-1]
+                    # PRIORIDAD 1: Evaluar señales SOLO en la vela recién CERRADA para evitar repainting.
+                    last_closed = df.iloc[-2]
 
-                    buy  = bool(last['Master_Buy'])
-                    sell = bool(last['Master_Sell'])
+                    buy  = bool(last_closed['Master_Buy'])
+                    sell = bool(last_closed['Master_Sell'])
 
                     if not (buy or sell): continue
 
@@ -437,7 +439,7 @@ if __name__ == "__main__":
                         ticker_live = exchange.fetch_ticker(symbol)
                         price = float(ticker_live['last'])
                     except Exception:
-                        price = float(last['close'])  # Fallback al cierre de vela si falla
+                        price = float(df.iloc[-1]['close'])  # Fallback a la vela actual si falla
 
                     # ---- Anti-recompra ----
                     try:
@@ -448,8 +450,9 @@ if __name__ == "__main__":
 
                     side_order = 'buy' if buy else 'sell'
 
-                    # ---- SL / TP dinámico (2% fallback, RR 1:2) ----
-                    atr_val = ta.atr(df['high'], df['low'], df['close'], length=14).iloc[-1]
+                    # ---- SL / TP dinámico (RR 1:2) ----
+                    # Usar ATR de la vela cerrada para evitar inflaciones por mechazos vivos
+                    atr_val = ta.atr(df['high'], df['low'], df['close'], length=14).iloc[-2]
                     if buy:
                         sl = price - atr_val * 1.5
                         tp = price + atr_val * 3.0
