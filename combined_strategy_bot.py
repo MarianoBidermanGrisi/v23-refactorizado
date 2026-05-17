@@ -363,10 +363,10 @@ def manage_open_positions():
                     atr_profit = profit_at_peak / (current_atr / entry)
 
                     # Lógica Escalonada
-                    if atr_profit >= 4.0:
+                    if atr_profit >= 3.6:
                         dynamic_trail_dist = (current_atr * 0.2) / peak
                         marcha_txt = "🚀 M3 Súper Agresivo"
-                    elif atr_profit >= 2.5:
+                    elif atr_profit >= 2.6:
                         dynamic_trail_dist = (current_atr * 0.5) / peak
                         marcha_txt = "🔥 M2 Apretado"
                     else:
