@@ -305,6 +305,7 @@ def manage_open_positions():
                 log.error(f"⚠️ Error tiempo máx {symbol}: {e}")
 
             # --- CÁLCULO ATR E INDICADORES PARA GESTIÓN ---
+            current_atr = None
             try:
                 # Obtenemos suficientes velas para el "warm-up" de indicadores
                 ohlcv = exchange.fetch_ohlcv(symbol, timeframe=TIMEFRAME, limit=300)
@@ -332,15 +333,14 @@ def manage_open_positions():
                         early_exit = True
                 
                 if early_exit:
-                    log.info(f"🚨 EARLY EXIT activado para {symbol}. 1 vela. PnL: {profit_pct*100:.2f}%")
-                    if close_position(symbol, side, "Early Exit (ZLEMA+TwoPole)"):
-                        send_telegram(f"🚨 *{symbol} CERRADA (Early Exit)*\nMotivo: ZLEMA roto + Two-Pole invertido (1 vela)\nPnL: {profit_pct*100:.2f}%")
+                    log.info(f"🚨 EARLY EXIT activado para {symbol}. PnL: {profit_pct*100:.2f}%")
+                    if close_position(symbol, side, "Early Exit (Multi-Vela)"):
+                        send_telegram(f"🚨 *{symbol} CERRADA (Early Exit)*\nMotivo: ZLEMA roto + Two-Pole invertido\nPnL: {profit_pct*100:.2f}%")
                         ALERTS_HISTORY[symbol] = 'CLOSED_BY_BOT'
                     continue
                 
                 # Porcentaje dinámico basado en ATR vs precio de entrada
                 dynamic_be_trigger = (current_atr * 1.5) / entry   # BE a 1.5 ATR de distancia
-                dynamic_trail_dist = (current_atr * 1.0) / PEAK_PRICES[symbol]    # Trailing a 1.0 ATR detrás del pico
             except Exception as e:
                 log.warning(f"⚠️ {symbol} Fallo al calcular ATR/Indicadores en gestión. Usando fallback estático. {e}")
                 dynamic_be_trigger = BE_TRIGGER_PCT
@@ -349,12 +349,34 @@ def manage_open_positions():
             # --- REGLA: BREAKEVEN ---
             if profit_pct >= dynamic_be_trigger and ALERTS_HISTORY.get(symbol) != 'BE':
                 if update_stop_loss(symbol, side, entry):
-                    send_telegram(f"🛡️ *{symbol} BREAKEVEN activado*\nDistancia cruzada: `{dynamic_be_trigger*100:.2f}%` (1.5 ATR)")
+                    send_telegram(f"🛡️ *{symbol} BREAKEVEN activado*\nDistancia cruzada: `{dynamic_be_trigger*100:.2f}%`")
                     ALERTS_HISTORY[symbol] = 'BE'
 
-            # --- REGLA: TRAILING STOP ---
+            # --- REGLA: TRAILING STOP (3 MARCHAS) ---
             if ALERTS_HISTORY.get(symbol) == 'BE':
                 peak = PEAK_PRICES[symbol]
+                
+                if current_atr is not None and current_atr > 0:
+                    # Calcular la ganancia en el pico actual
+                    profit_at_peak = (peak - entry) / entry if side == 'long' else (entry - peak) / entry
+                    # Convertir esa ganancia a cuántas veces equivale al ATR actual
+                    atr_profit = profit_at_peak / (current_atr / entry)
+
+                    # Lógica Escalonada
+                    if atr_profit >= 4.0:
+                        dynamic_trail_dist = (current_atr * 0.2) / peak
+                        marcha_txt = "🚀 M3 Súper Agresivo"
+                    elif atr_profit >= 2.5:
+                        dynamic_trail_dist = (current_atr * 0.5) / peak
+                        marcha_txt = "🔥 M2 Apretado"
+                    else:
+                        dynamic_trail_dist = (current_atr * 1.0) / peak
+                        marcha_txt = "🐢 M1 Crecimiento"
+                else:
+                    # Si hubo un error en la API y current_atr no existe, usar fallback
+                    marcha_txt = "⚠️ M-Fallback Estático"
+                    # dynamic_trail_dist ya se definió en el except
+
                 trail_sl = peak * (1 - dynamic_trail_dist) if side == 'long' else peak * (1 + dynamic_trail_dist)
                 
                 last_trail = ALERTS_HISTORY.get(f"{symbol}_trail", 0 if side == 'long' else 999999)
@@ -365,7 +387,7 @@ def manage_open_positions():
                         
                 if moved and valid:
                     if update_stop_loss(symbol, side, trail_sl):
-                        send_telegram(f"📈 *{symbol} TRAILING*\nSL → `{trail_sl:.4f}`\nDistancia Trail: `{dynamic_trail_dist*100:.2f}%` (1.0 ATR)")
+                        send_telegram(f"📈 *{symbol} TRAILING*\nSL → `{trail_sl:.4f}`\nFase: {marcha_txt}\nDistancia: `{(dynamic_trail_dist*100):.2f}%`")
                         ALERTS_HISTORY[f"{symbol}_trail"] = trail_sl
 
     except Exception as e:
