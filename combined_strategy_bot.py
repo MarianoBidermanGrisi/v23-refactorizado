@@ -63,7 +63,7 @@ DIY_EXPIRY    = 3   # Signal Expiry candles
 
 # Zero Lag
 ZL_LENGTH = 70
-ZL_MULT   = 1.2
+ZL_MULT   = 1.5 # ORIGINAL 1.2
 
 # Two-Pole Oscillator
 TP_FILTER_LEN = 15
