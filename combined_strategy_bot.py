@@ -320,22 +320,22 @@ def manage_open_positions():
                 
                 early_exit = False
                 if side == 'long':
-                    # Multi-vela: Exigir que la vela CERRADA ya muestre la ruptura, y la viva lo confirme
-                    zlema_broken = c_closed['close'] < c_closed['ZLEMA'] and c_live['close'] < c_live['ZLEMA']
-                    tp_bear = c_closed['Two_P'] < c_closed['Two_PP'] and c_live['Two_P'] < c_live['Two_PP']
+                    # Single-vela: Reacción inmediata a la vela viva
+                    zlema_broken = c_live['close'] < c_live['ZLEMA']
+                    tp_bear = c_live['Two_P'] < c_live['Two_PP']
                     if zlema_broken and tp_bear and profit_pct < -0.005:
                         early_exit = True
                 else:
-                    # Multi-vela: Exigir que la vela CERRADA ya muestre la ruptura, y la viva lo confirme
-                    zlema_broken = c_closed['close'] > c_closed['ZLEMA'] and c_live['close'] > c_live['ZLEMA']
-                    tp_bull = c_closed['Two_P'] > c_closed['Two_PP'] and c_live['Two_P'] > c_live['Two_PP']
+                    # Single-vela: Reacción inmediata a la vela viva
+                    zlema_broken = c_live['close'] > c_live['ZLEMA']
+                    tp_bull = c_live['Two_P'] > c_live['Two_PP']
                     if zlema_broken and tp_bull and profit_pct < -0.005:
                         early_exit = True
                 
                 if early_exit:
                     log.info(f"🚨 EARLY EXIT activado para {symbol}. PnL: {profit_pct*100:.2f}%")
-                    if close_position(symbol, side, "Early Exit (Multi-Vela)"):
-                        send_telegram(f"🚨 *{symbol} CERRADA (Early Exit)*\nMotivo: ZLEMA roto + Two-Pole invertido\nPnL: {profit_pct*100:.2f}%")
+                    if close_position(symbol, side, "Early Exit (Vela-Viva)"):
+                        send_telegram(f"🚨 *{symbol} CERRADA (Early Exit)*\nMotivo: ZLEMA roto + Two-Pole invertido (Live)\nPnL: {profit_pct*100:.2f}%")
                         ALERTS_HISTORY[symbol] = 'CLOSED_BY_BOT'
                     continue
                 
