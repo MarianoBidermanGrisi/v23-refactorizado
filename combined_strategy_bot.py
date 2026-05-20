@@ -323,13 +323,13 @@ def manage_open_positions():
                     # Single-vela: Reacción inmediata a la vela viva
                     zlema_broken = c_live['close'] < c_live['ZLEMA']
                     tp_bear = c_live['Two_P'] < c_live['Two_PP']
-                    if zlema_broken and tp_bear and profit_pct < -0.001:
+                    if (zlema_broken or tp_bear) and profit_pct < -0.005:
                         early_exit = True
                 else:
                     # Single-vela: Reacción inmediata a la vela viva
                     zlema_broken = c_live['close'] > c_live['ZLEMA']
                     tp_bull = c_live['Two_P'] > c_live['Two_PP']
-                    if zlema_broken and tp_bull and profit_pct < -0.001:
+                    if (zlema_broken or tp_bull) and profit_pct < -0.005:
                         early_exit = True
                 
                 if early_exit:
@@ -363,10 +363,10 @@ def manage_open_positions():
                     atr_profit = profit_at_peak / (current_atr / entry)
 
                     # Lógica Escalonada
-                    if atr_profit >= 4.0:
+                    if atr_profit >= 2.7:
                         dynamic_trail_dist = (current_atr * 0.2) / peak
                         marcha_txt = "🚀 M3 Súper Agresivo"
-                    elif atr_profit >= 3.0:
+                    elif atr_profit >= 2.2:
                         dynamic_trail_dist = (current_atr * 0.5) / peak
                         marcha_txt = "🔥 M2 Apretado"
                     else:
