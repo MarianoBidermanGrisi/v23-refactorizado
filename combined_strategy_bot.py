@@ -323,13 +323,13 @@ def manage_open_positions():
                     # Single-vela: Reacción inmediata a la vela viva
                     zlema_broken = c_live['close'] < c_live['ZLEMA']
                     tp_bear = c_live['Two_P'] < c_live['Two_PP']
-                    if zlema_broken and tp_bear and profit_pct < -0.005:
+                    if zlema_broken and tp_bear and profit_pct < -0.001:
                         early_exit = True
                 else:
                     # Single-vela: Reacción inmediata a la vela viva
                     zlema_broken = c_live['close'] > c_live['ZLEMA']
                     tp_bull = c_live['Two_P'] > c_live['Two_PP']
-                    if zlema_broken and tp_bull and profit_pct < -0.005:
+                    if zlema_broken and tp_bull and profit_pct < -0.001:
                         early_exit = True
                 
                 if early_exit:
