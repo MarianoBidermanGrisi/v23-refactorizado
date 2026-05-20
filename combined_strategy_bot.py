@@ -169,6 +169,10 @@ def calculate_all_indicators(df):
     # --- Two-Pole ---
     df['Two_P'], df['Two_PP'] = calc_two_pole(close, TP_FILTER_LEN)
 
+    # --- Filtro de Anomalía de Volumen ---
+    df['Vol_SMA'] = df['volume'].rolling(20).mean()
+    df['Vol_Anomaly'] = df['volume'] > (df['Vol_SMA'] * 1.4)
+
     return df.dropna()
 
 # ==========================================================
@@ -227,9 +231,9 @@ def generate_signals(df):
         tp_buy  = df['Two_P'].iloc[i] > df['Two_PP'].iloc[i] and df['Two_P'].iloc[i-1] <= df['Two_PP'].iloc[i-1] and df['Two_P'].iloc[i] < 0
         tp_sell = df['Two_P'].iloc[i] < df['Two_PP'].iloc[i] and df['Two_P'].iloc[i-1] >= df['Two_PP'].iloc[i-1] and df['Two_P'].iloc[i] > 0
 
-        if trend_long  and (zl_buy  or tp_buy  or st_buy):
+        if trend_long  and (zl_buy  or tp_buy  or st_buy) and df['Vol_Anomaly'].iloc[i]:
             df.at[df.index[i], 'Master_Buy']  = True
-        if trend_short and (zl_sell or tp_sell or st_sell):
+        if trend_short and (zl_sell or tp_sell or st_sell) and df['Vol_Anomaly'].iloc[i]:
             df.at[df.index[i], 'Master_Sell'] = True
 
     return df
