@@ -374,7 +374,7 @@ def manage_open_positions():
                         dynamic_trail_dist = (current_atr * 0.5) / peak
                         marcha_txt = "🔥 M2 Apretado"
                     else:
-                        dynamic_trail_dist = (current_atr * 1.5) / peak
+                        dynamic_trail_dist = (current_atr * 1.0) / peak
                         marcha_txt = "🐢 M1 Crecimiento"
                 else:
                     # Si hubo un error en la API y current_atr no existe, usar fallback
