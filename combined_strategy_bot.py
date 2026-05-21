@@ -59,7 +59,7 @@ DIY_EMA_LEN   = 200
 DIY_MACD_FAST = 12
 DIY_MACD_SLOW = 26
 DIY_MACD_SIG  = 9
-DIY_EXPIRY    = 3   # Signal Expiry candles
+DIY_EXPIRY    = 1.0   # Signal Expiry candles
 
 # Zero Lag
 ZL_LENGTH = 70
@@ -171,7 +171,7 @@ def calculate_all_indicators(df):
 
     # --- Filtro de Anomalía de Volumen ---
     df['Vol_SMA'] = df['volume'].rolling(21).median()
-    df['Vol_Anomaly'] = df['volume'] > (df['Vol_SMA'] * 1.5)
+    df['Vol_Anomaly'] = df['volume'] > (df['Vol_SMA'] * 1.6)
 
     return df.dropna()
 
