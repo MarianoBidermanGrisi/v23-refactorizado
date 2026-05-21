@@ -170,8 +170,8 @@ def calculate_all_indicators(df):
     df['Two_P'], df['Two_PP'] = calc_two_pole(close, TP_FILTER_LEN)
 
     # --- Filtro de Anomalía de Volumen ---
-    df['Vol_SMA'] = df['volume'].rolling(20).mean()
-    df['Vol_Anomaly'] = df['volume'] > (df['Vol_SMA'] * 1.4)
+    df['Vol_SMA'] = df['volume'].rolling(21).mean()
+    df['Vol_Anomaly'] = df['volume'] > (df['Vol_SMA'] * 1.5)
 
     return df.dropna()
 
@@ -431,14 +431,14 @@ if __name__ == "__main__":
             if len(busy_symbols) >= MAX_OPEN_POSITIONS:
                 time.sleep(60); continue
 
-            # Top 100 por volumen
+            # Top 50 por volumen
             tickers = exchange.fetch_tickers()
-            top_100 = [p[0] for p in sorted(
+            top_50 = [p[0] for p in sorted(
                 [(s, float(t.get('quoteVolume', 0))) for s, t in tickers.items() if s.endswith('/USDT:USDT')],
                 key=lambda x: x[1], reverse=True
-            )[:100]]
+            )[:50]]
 
-            for symbol in top_100:
+            for symbol in top_50:
                 if symbol in busy_symbols or len(busy_symbols) >= MAX_OPEN_POSITIONS: continue
                 if symbol in COOLDOWNS:
                     if time.time() < COOLDOWNS[symbol]: continue
