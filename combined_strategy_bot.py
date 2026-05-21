@@ -170,7 +170,7 @@ def calculate_all_indicators(df):
     df['Two_P'], df['Two_PP'] = calc_two_pole(close, TP_FILTER_LEN)
 
     # --- Filtro de Anomalía de Volumen ---
-    df['Vol_SMA'] = df['volume'].rolling(21).mean()
+    df['Vol_SMA'] = df['volume'].rolling(21).medium()
     df['Vol_Anomaly'] = df['volume'] > (df['Vol_SMA'] * 1.5)
 
     return df.dropna()
