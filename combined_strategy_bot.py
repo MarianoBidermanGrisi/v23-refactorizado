@@ -59,7 +59,7 @@ DIY_EMA_LEN   = 200
 DIY_MACD_FAST = 12
 DIY_MACD_SLOW = 26
 DIY_MACD_SIG  = 9
-DIY_EXPIRY    = 1.0   # Signal Expiry candles
+DIY_EXPIRY    = 1   # Signal Expiry candles
 
 # Zero Lag
 ZL_LENGTH = 70
