@@ -55,11 +55,11 @@ MIN_RISK_REWARD_RATIO = 1.8
 # DIY Bot
 DIY_ST_LENGTH = 10
 DIY_ST_MULT   = 3.0
-DIY_EMA_LEN   = 200
+DIY_EMA_LEN   = 70
 DIY_MACD_FAST = 12
 DIY_MACD_SLOW = 26
 DIY_MACD_SIG  = 9
-DIY_EXPIRY    = 1   # Signal Expiry candles
+DIY_EXPIRY    = 1 # Signal Expiry candles
 
 # Zero Lag
 ZL_LENGTH = 70
@@ -154,7 +154,7 @@ def calculate_all_indicators(df):
     st_dir_col = [col for col in st.columns if col.startswith('SUPERTd_')][0]
     df['ST_dir'] = st[st_dir_col]
     
-    df['EMA_200'] = ta.ema(close, length=DIY_EMA_LEN)
+    df['EMA_70'] = ta.ema(close, length=DIY_EMA_LEN)
     
     # MACD de pandas_ta
     macd = ta.macd(close, fast=DIY_MACD_FAST, slow=DIY_MACD_SLOW, signal=DIY_MACD_SIG)
@@ -170,8 +170,9 @@ def calculate_all_indicators(df):
     df['Two_P'], df['Two_PP'] = calc_two_pole(close, TP_FILTER_LEN)
 
     # --- Filtro de Anomalía de Volumen ---
-    df['Vol_SMA'] = df['volume'].rolling(21).median()
-    df['Vol_Anomaly'] = df['volume'] > (df['Vol_SMA'] * 1.6)
+    # Usamos percentil 80 de las últimas 50 velas (adaptativo según liquidez de cada moneda)
+    vol_pct_80 = df['volume'].rolling(50).quantile(0.80)
+    df['Vol_Anomaly'] = df['volume'] > vol_pct_80
 
     return df.dropna()
 
@@ -201,8 +202,8 @@ def generate_signals(df):
         zl_trend = df['zl_trend_state'].iloc[i]
 
         # ---- FILTROS DE TENDENCIA ----
-        ema_long  = df['close'].iloc[i] > df['EMA_200'].iloc[i]
-        ema_short = df['close'].iloc[i] < df['EMA_200'].iloc[i]
+        ema_long  = df['close'].iloc[i] > df['EMA_70'].iloc[i]
+        ema_short = df['close'].iloc[i] < df['EMA_70'].iloc[i]
         st_long   = df['ST_dir'].iloc[i] == 1
         st_short  = df['ST_dir'].iloc[i] == -1
         macd_long  = df['MACD'].iloc[i] > df['MACD_sig'].iloc[i]
@@ -532,7 +533,7 @@ if __name__ == "__main__":
                         f"Entrada: `{exchange.price_to_precision(symbol, price)}`\n"
                         f"🛑 SL: `{exchange.price_to_precision(symbol, sl)}`\n"
                         f"🎯 TP: `{exchange.price_to_precision(symbol, tp)}`\n"
-                        f"R/R: `{rr:.2f}` | EMA200✅ | ST✅ | ZL✅ | MACD✅"
+                        f"R/R: `{rr:.2f}` | EMA70✅ | ST✅ | ZL✅ | MACD✅"
                     )
                     busy_symbols.add(symbol)
                     SESSION_ACTIVE_SYMBOLS.add(symbol)
