@@ -45,6 +45,8 @@ LEVERAGE           = 10.0
 BE_TRIGGER_PCT    = 0.015   # Activar Breakeven al 1.5%
 TRAILING_DIST_PCT = 0.019   # Trailing Stop 1.9%
 MAX_POSITION_AGE_HOURS = 6.0
+LIMIT_DISCOUNT_PCT = 0.01   # Descuento del 1.0% para orden Límite
+LIMIT_ORDER_EXPIRY_MINUTES = 30 # Minutos de espera para la orden Límite
 
 # --- Filtros de calidad ---
 MAX_SL_DISTANCE_PCT   = 0.035
@@ -402,6 +404,26 @@ def manage_open_positions():
         log.error(f"❌ Error en manage_open_positions: {e}")
 
 # ==========================================================
+# 7.5 GESTIÓN DE ÓRDENES LÍMITE ABIERTAS
+# ==========================================================
+def manage_open_orders():
+    try:
+        orders = exchange.fetch_open_orders()
+        for order in orders:
+            symbol = order['symbol']
+            # Nos aseguramos de cancelar solo las órdenes límite que el bot puso para abrir
+            if order.get('type') == 'limit':
+                open_ms = float(order.get('timestamp') or order['info'].get('cTime') or 0)
+                if open_ms > 0:
+                    age_min = (time.time() - open_ms / 1000) / 60
+                    if age_min >= LIMIT_ORDER_EXPIRY_MINUTES:
+                        exchange.cancel_order(order['id'], symbol)
+                        log.info(f"⏳ {symbol} Orden límite cancelada (Expiró tras {age_min:.1f}m)")
+                        send_telegram(f"⏳ *{symbol} LÍMITE CANCELADA*\nEl precio no retrocedió al punto de entrada en {age_min:.1f}m.")
+    except Exception as e:
+        log.error(f"❌ Error en manage_open_orders: {e}")
+
+# ==========================================================
 # 8. BUCLE PRINCIPAL
 # ==========================================================
 if __name__ == "__main__":
@@ -414,8 +436,9 @@ if __name__ == "__main__":
             if now.hour == 0 and now.day != last_report_day:
                 send_telegram("📊 *REPORTE DIARIO*"); last_report_day = now.day
 
-            # Gestionar posiciones abiertas
+            # Gestionar posiciones y órdenes abiertas
             manage_open_positions()
+            manage_open_orders()
 
             # Balance
             try:
@@ -423,23 +446,31 @@ if __name__ == "__main__":
             except Exception as e:
                 log.error(f"Error balance: {e}"); balance = 0.0
 
-            # Posiciones activas
+            # Posiciones y Órdenes activas (Bloqueo de seguridad)
             positions = exchange.fetch_positions()
             busy_symbols = {p['symbol'] for p in positions if float(p['contracts']) > 0}
+            
+            try:
+                open_orders = exchange.fetch_open_orders()
+                limit_symbols = {o['symbol'] for o in open_orders if o.get('type') == 'limit'}
+                busy_symbols.update(limit_symbols)
+            except Exception as e:
+                log.error(f"⚠️ Error leyendo órdenes para memoria: {e}")
+
             SESSION_ACTIVE_SYMBOLS = set(busy_symbols)
             log.info(f"🔄 [{now.strftime('%H:%M:%S')}] Balance: {balance:.2f} USDT | Abiertas: {len(busy_symbols)}/{MAX_OPEN_POSITIONS}")
 
             if len(busy_symbols) >= MAX_OPEN_POSITIONS:
                 time.sleep(60); continue
 
-            # Top 50 por volumen
+            # Top 100 por volumen
             tickers = exchange.fetch_tickers()
-            top_50 = [p[0] for p in sorted(
+            top_100 = [p[0] for p in sorted(
                 [(s, float(t.get('quoteVolume', 0))) for s, t in tickers.items() if s.endswith('/USDT:USDT')],
                 key=lambda x: x[1], reverse=True
-            )[:50]]
+            )[:100]]
 
-            for symbol in top_50:
+            for symbol in top_100:
                 if symbol in busy_symbols or len(busy_symbols) >= MAX_OPEN_POSITIONS: continue
                 if symbol in COOLDOWNS:
                     if time.time() < COOLDOWNS[symbol]: continue
@@ -480,18 +511,25 @@ if __name__ == "__main__":
 
                     side_order = 'buy' if buy else 'sell'
 
+                    # ---- Precio Límite Francotirador ----
+                    if buy:
+                        limit_price = price * (1 - LIMIT_DISCOUNT_PCT)
+                    else:
+                        limit_price = price * (1 + LIMIT_DISCOUNT_PCT)
+
                     # ---- SL / TP dinámico (RR 1:2) ----
                     # Usar ATR de la vela cerrada para evitar inflaciones por mechazos vivos
                     atr_val = ta.atr(df['high'], df['low'], df['close'], length=14).iloc[-2]
+                    
                     if buy:
-                        sl = price - atr_val * 1.5
-                        tp = price + atr_val * 3.0
+                        sl = limit_price - atr_val * 1.5
+                        tp = limit_price + atr_val * 3.0
                     else:
-                        sl = price + atr_val * 1.5
-                        tp = price - atr_val * 3.0
+                        sl = limit_price + atr_val * 1.5
+                        tp = limit_price - atr_val * 3.0
 
-                    sl_pct = abs(price - sl) / price
-                    tp_pct = abs(price - tp) / price
+                    sl_pct = abs(limit_price - sl) / limit_price
+                    tp_pct = abs(limit_price - tp) / limit_price
 
                     # ---- REGLA 1: SL > TP → rechazar ----
                     if sl_pct >= tp_pct:
@@ -511,7 +549,7 @@ if __name__ == "__main__":
                     market     = exchange.market(symbol)
                     step       = market['limits']['amount']['min'] or 1e-8
                     pos_value  = (balance * RISK_PERCENT) * LEVERAGE
-                    raw_qty    = pos_value / price
+                    raw_qty    = pos_value / limit_price
                     qty        = (raw_qty // step) * step
 
                     if qty <= 0:
@@ -525,12 +563,12 @@ if __name__ == "__main__":
                         'presetStopLossPrice':    str(exchange.price_to_precision(symbol, sl))
                     }
                     exchange.set_leverage(int(LEVERAGE), symbol)
-                    exchange.create_order(symbol, 'market', side_order, qty, params=params)
+                    exchange.create_order(symbol, 'limit', side_order, qty, limit_price, params=params)
 
-                    log.info(f"✅ {symbol} {side_order.upper()} | Entrada: {price:.4f} | SL: {sl:.4f} | TP: {tp:.4f}")
+                    log.info(f"✅ {symbol} {side_order.upper()} LÍMITE | Precio actual: {price:.4f} | Target: {limit_price:.4f} | SL: {sl:.4f} | TP: {tp:.4f}")
                     send_telegram(
-                        f"🚀 *{symbol} {side_order.upper()}*\n"
-                        f"Entrada: `{exchange.price_to_precision(symbol, price)}`\n"
+                        f"🎯 *{symbol} {side_order.upper()} LÍMITE*\n"
+                        f"Precio Esperado: `{exchange.price_to_precision(symbol, limit_price)}`\n"
                         f"🛑 SL: `{exchange.price_to_precision(symbol, sl)}`\n"
                         f"🎯 TP: `{exchange.price_to_precision(symbol, tp)}`\n"
                         f"R/R: `{rr:.2f}` | EMA70✅ | ST✅ | ZL✅ | MACD✅"
