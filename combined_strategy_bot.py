@@ -42,11 +42,12 @@ RISK_PERCENT       = 0.07
 LEVERAGE           = 10.0
 
 # --- Gestión de riesgo ---
+ENABLE_EARLY_EXIT          = True   # Activar o desactivar manualmente el early exit (True/False)
 BE_TRIGGER_PCT    = 0.015   # Activar Breakeven al 1.5%
 TRAILING_DIST_PCT = 0.019   # Trailing Stop 1.9%
 MAX_POSITION_AGE_HOURS = 6.0
 LIMIT_DISCOUNT_PCT = 0.01   # Descuento del 1.0% para orden Límite
-LIMIT_ORDER_EXPIRY_MINUTES = 30 # Minutos de espera para la orden Límite
+LIMIT_ORDER_EXPIRY_MINUTES = 45 # original 15 Minutos de espera para la orden Límite
 
 # --- Filtros de calidad ---
 MAX_SL_DISTANCE_PCT   = 0.035
@@ -322,32 +323,33 @@ def manage_open_positions():
                 current_atr = ta.atr(df_ind['high'], df_ind['low'], df_ind['close'], length=14).iloc[-1]
                 
                 # --- EARLY EXIT (Cierre Anticipado) ---
-                df_ind['ZLEMA'] = calc_zlema(df_ind['close'], ZL_LENGTH)
-                df_ind['Two_P'], df_ind['Two_PP'] = calc_two_pole(df_ind['close'], TP_FILTER_LEN)
-                c_closed = df_ind.iloc[-2]  # Última vela cerrada
-                c_live   = df_ind.iloc[-1]  # Vela actual en formación
-                
-                early_exit = False
-                if side == 'long':
-                    # Single-vela: Reacción inmediata a la vela viva
-                    zlema_broken = c_live['close'] < c_live['ZLEMA']
-                    tp_bear = c_live['Two_P'] < c_live['Two_PP']
-                    if (zlema_broken or tp_bear) and profit_pct < -0.005:
-                        early_exit = True
-                else:
-                    # Single-vela: Reacción inmediata a la vela viva
-                    zlema_broken = c_live['close'] > c_live['ZLEMA']
-                    tp_bull = c_live['Two_P'] > c_live['Two_PP']
-                    if (zlema_broken or tp_bull) and profit_pct < -0.005:
-                        early_exit = True
-                
-                if early_exit:
-                    log.info(f"🚨 EARLY EXIT activado para {symbol}. PnL: {profit_pct*100:.2f}%")
-                    if close_position(symbol, side, "Early Exit (Vela-Viva)"):
-                        send_telegram(f"🚨 *{symbol} CERRADA (Early Exit)*\nMotivo: ZLEMA roto + Two-Pole invertido (Live)\nPnL: {profit_pct*100:.2f}%")
-                        ALERTS_HISTORY[symbol] = 'CLOSED_BY_BOT'
-                        COOLDOWNS[symbol] = time.time() + 14400
-                    continue
+                if ENABLE_EARLY_EXIT:
+                    df_ind['ZLEMA'] = calc_zlema(df_ind['close'], ZL_LENGTH)
+                    df_ind['Two_P'], df_ind['Two_PP'] = calc_two_pole(df_ind['close'], TP_FILTER_LEN)
+                    c_closed = df_ind.iloc[-2]  # Última vela cerrada
+                    c_live   = df_ind.iloc[-1]  # Vela actual en formación
+                    
+                    early_exit = False
+                    if side == 'long':
+                        # Single-vela: Reacción inmediata a la vela viva
+                        zlema_broken = c_live['close'] < c_live['ZLEMA']
+                        tp_bear = c_live['Two_P'] < c_live['Two_PP']
+                        if (zlema_broken or tp_bear) and profit_pct < -0.018: # original  -0.005  5%
+                            early_exit = True
+                    else:
+                        # Single-vela: Reacción inmediata a la vela viva
+                        zlema_broken = c_live['close'] > c_live['ZLEMA']
+                        tp_bull = c_live['Two_P'] > c_live['Two_PP']
+                        if (zlema_broken or tp_bull) and profit_pct < -0.018: # original  -0.005 5%
+                            early_exit = True
+                    
+                    if early_exit:
+                        log.info(f"🚨 EARLY EXIT activado para {symbol}. PnL: {profit_pct*100:.2f}%")
+                        if close_position(symbol, side, "Early Exit (Vela-Viva)"):
+                            send_telegram(f"🚨 *{symbol} CERRADA (Early Exit)*\nMotivo: ZLEMA roto + Two-Pole invertido (Live)\nPnL: {profit_pct*100:.2f}%")
+                            ALERTS_HISTORY[symbol] = 'CLOSED_BY_BOT'
+                            COOLDOWNS[symbol] = time.time() + 14400
+                        continue
                 
                 # Porcentaje dinámico basado en ATR vs precio de entrada
                 dynamic_be_trigger = (current_atr * 1.5) / entry   # BE a 1.5 ATR de distancia
