@@ -46,8 +46,8 @@ ENABLE_EARLY_EXIT          = True   # Activar o desactivar manualmente el early 
 BE_TRIGGER_PCT    = 0.015   # Activar Breakeven al 1.5%
 TRAILING_DIST_PCT = 0.019   # Trailing Stop 1.9%
 MAX_POSITION_AGE_HOURS = 6.0
-LIMIT_DISCOUNT_PCT = 0.01   # Descuento del 1.0% para orden Límite
-LIMIT_ORDER_EXPIRY_MINUTES = 45 # original 15 Minutos de espera para la orden Límite
+LIMIT_DISCOUNT_PCT = 0.003   # original 0.01 Descuento del 1.0% para orden Límite
+LIMIT_ORDER_EXPIRY_MINUTES = 45 # Minutos de espera para la orden Límite
 
 # --- Filtros de calidad ---
 MAX_SL_DISTANCE_PCT   = 0.035
@@ -58,7 +58,7 @@ MIN_RISK_REWARD_RATIO = 1.8
 # DIY Bot
 DIY_ST_LENGTH = 10
 DIY_ST_MULT   = 3.0
-DIY_EMA_LEN   = 70
+DIY_VMA_LEN   = 6   # Longitud de la Media Adaptativa VMA (reemplaza a DIY_EMA_LEN)
 DIY_MACD_FAST = 12
 DIY_MACD_SLOW = 26
 DIY_MACD_SIG  = 9
@@ -146,6 +146,54 @@ def calc_two_pole(close, filter_length=15):
     smooth2 = smooth1.ewm(span=filter_length, adjust=False).mean()
     return smooth2, smooth2.shift(4)
 
+def calculate_vma(close_series, length=6):
+    k30 = 1.0 / length
+    close = close_series
+    
+    # pdm y mdm vectorizados con .clip()
+    pdm = (close - close.shift(1)).clip(lower=0)
+    mdm = (close.shift(1) - close).clip(lower=0)
+    
+    # pdmS y mdmS calculados vectorialmente como EMAs
+    pdmS = pdm.ewm(alpha=k30, adjust=False).mean()
+    mdmS = mdm.ewm(alpha=k30, adjust=False).mean()
+    
+    s = pdmS + mdmS
+    
+    # pdi y mdi vectorizados evitando división por cero
+    pdi = np.where(s != 0, pdmS / s, 0)
+    mdi = np.where(s != 0, mdmS / s, 0)
+    
+    # Suavizado de pdi y mdi vectorialmente
+    pdiS = pd.Series(pdi, index=close.index).ewm(alpha=k30, adjust=False).mean()
+    mdiS = pd.Series(mdi, index=close.index).ewm(alpha=k30, adjust=False).mean()
+    
+    d = (pdiS - mdiS).abs()
+    s1 = pdiS + mdiS
+    
+    # iS vectorial
+    dx = np.where(s1 != 0, d / s1, 0)
+    iS = pd.Series(dx, index=close.index).ewm(alpha=k30, adjust=False).mean()
+    
+    # Máximos y Mínimos rodantes (vectorial) con min_periods=1 para evitar NaN al inicio
+    hhv = iS.rolling(window=length, min_periods=1).max()
+    llv = iS.rolling(window=length, min_periods=1).min()
+    d1 = hhv - llv
+    
+    # Índice de Volatilidad (vI) vectorial
+    vI = np.where(d1 != 0, (iS - llv) / d1, 0)
+    
+    # Bucle recursivo final
+    vma_vals = np.zeros(len(close))
+    close_arr = close.values
+    vma_vals[0] = close_arr[0]
+    
+    for i in range(1, len(close)):
+        vi_val = vI[i]
+        vma_vals[i] = (1 - k30 * vi_val) * vma_vals[i-1] + k30 * vi_val * close_arr[i]
+        
+    return pd.Series(vma_vals, index=close.index)
+
 def calculate_all_indicators(df):
     """Calcula los 3 sistemas de indicadores sobre el dataframe."""
     close = df['close']
@@ -157,7 +205,7 @@ def calculate_all_indicators(df):
     st_dir_col = [col for col in st.columns if col.startswith('SUPERTd_')][0]
     df['ST_dir'] = st[st_dir_col]
     
-    df['EMA_70'] = ta.ema(close, length=DIY_EMA_LEN)
+    df['VMA'] = calculate_vma(close, length=DIY_VMA_LEN)
     
     # MACD de pandas_ta
     macd = ta.macd(close, fast=DIY_MACD_FAST, slow=DIY_MACD_SLOW, signal=DIY_MACD_SIG)
@@ -205,8 +253,8 @@ def generate_signals(df):
         zl_trend = df['zl_trend_state'].iloc[i]
 
         # ---- FILTROS DE TENDENCIA ----
-        ema_long  = df['close'].iloc[i] > df['EMA_70'].iloc[i]
-        ema_short = df['close'].iloc[i] < df['EMA_70'].iloc[i]
+        vma_long  = df['close'].iloc[i] > df['VMA'].iloc[i]
+        vma_short = df['close'].iloc[i] < df['VMA'].iloc[i]
         st_long   = df['ST_dir'].iloc[i] == 1
         st_short  = df['ST_dir'].iloc[i] == -1
         macd_long  = df['MACD'].iloc[i] > df['MACD_sig'].iloc[i]
@@ -214,8 +262,8 @@ def generate_signals(df):
         zl_up   = zl_trend == 1
         zl_down = zl_trend == -1
 
-        trend_long  = ema_long  and st_long  and macd_long  and zl_up
-        trend_short = ema_short and st_short and macd_short and zl_down
+        trend_long  = vma_long  and st_long  and macd_long  and zl_up
+        trend_short = vma_short and st_short and macd_short and zl_down
 
         # ---- GATILLOS ----
         # 1. DIY Bot: SuperTrend Flip con Signal Expiry (3 velas)
@@ -334,13 +382,13 @@ def manage_open_positions():
                         # Single-vela: Reacción inmediata a la vela viva
                         zlema_broken = c_live['close'] < c_live['ZLEMA']
                         tp_bear = c_live['Two_P'] < c_live['Two_PP']
-                        if (zlema_broken or tp_bear) and profit_pct < -0.018: # original  -0.005  5%
+                        if (zlema_broken or tp_bear) and profit_pct < -0.012:   # original  -0.005
                             early_exit = True
                     else:
                         # Single-vela: Reacción inmediata a la vela viva
                         zlema_broken = c_live['close'] > c_live['ZLEMA']
                         tp_bull = c_live['Two_P'] > c_live['Two_PP']
-                        if (zlema_broken or tp_bull) and profit_pct < -0.018: # original  -0.005 5%
+                        if (zlema_broken or tp_bull) and profit_pct < -0.012:  # original  -0.005
                             early_exit = True
                     
                     if early_exit:
@@ -573,7 +621,7 @@ if __name__ == "__main__":
                         f"Precio Esperado: `{exchange.price_to_precision(symbol, limit_price)}`\n"
                         f"🛑 SL: `{exchange.price_to_precision(symbol, sl)}`\n"
                         f"🎯 TP: `{exchange.price_to_precision(symbol, tp)}`\n"
-                        f"R/R: `{rr:.2f}` | EMA70✅ | ST✅ | ZL✅ | MACD✅"
+                        f"R/R: `{rr:.2f}` | VMA{DIY_VMA_LEN}✅ | ST✅ | ZL✅ | MACD✅"
                     )
                     busy_symbols.add(symbol)
                     SESSION_ACTIVE_SYMBOLS.add(symbol)
