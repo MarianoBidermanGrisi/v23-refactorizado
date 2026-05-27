@@ -46,13 +46,13 @@ ENABLE_EARLY_EXIT          = True   # Activar o desactivar manualmente el early 
 BE_TRIGGER_PCT    = 0.015   # Activar Breakeven al 1.5%
 TRAILING_DIST_PCT = 0.019   # Trailing Stop 1.9%
 MAX_POSITION_AGE_HOURS = 6.0
-LIMIT_DISCOUNT_PCT = 0.015   # original 0.01 Descuento del 1.0% para orden Límite
+LIMIT_DISCOUNT_PCT = 0.02   # original 0.01 Descuento del 1.0% para orden Límite
 LIMIT_ORDER_EXPIRY_MINUTES = 45 # Minutos de espera para la orden Límite
 
 # --- Filtros de calidad ---
 MAX_SL_DISTANCE_PCT   = 0.035
 MIN_TP_DISTANCE_PCT   = 0.020
-MIN_RISK_REWARD_RATIO = 1.8
+MIN_RISK_REWARD_RATIO = 2.0
 
 # --- Parámetros de indicadores ---
 # DIY Bot
