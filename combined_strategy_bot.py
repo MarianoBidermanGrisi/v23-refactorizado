@@ -37,7 +37,7 @@ TELEGRAM_CHAT_ID = os.environ.get('TELEGRAM_CHAT_ID')
 
 # --- Timeframe y posiciones ---
 TIMEFRAME          = '15m'
-MAX_OPEN_POSITIONS = 5
+MAX_OPEN_POSITIONS = 7
 RISK_PERCENT       = 0.07
 LEVERAGE           = 10.0
 
@@ -47,7 +47,7 @@ BE_TRIGGER_PCT    = 0.012   # Activar Breakeven al 1.5%
 TRAILING_DIST_PCT = 0.019   # Trailing Stop 1.9%
 MAX_POSITION_AGE_HOURS = 6.0
 LIMIT_DISCOUNT_PCT = 0.03   # original 0.01 Descuento del 1.0% para orden Límite
-LIMIT_ORDER_EXPIRY_MINUTES = 60 # Minutos de espera para la orden Límite
+LIMIT_ORDER_EXPIRY_MINUTES = 75 # Minutos de espera para la orden Límite
 
 # --- Filtros de calidad ---
 MAX_SL_DISTANCE_PCT   = 0.035
