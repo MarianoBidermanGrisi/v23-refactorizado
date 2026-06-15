@@ -1,7 +1,7 @@
 """
-Web service wrapper para combined_strategy_bot.py.
-Este archivo permite desplegar el bot en Render.com manteniendo un servidor web activo.
-Basado en la estructura proporcionada por el usuario.
+Web service wrapper para botabracadabra.py.
+Importa y ejecuta el bot directamente en un hilo daemon.
+Compatible con Render.com (Gunicorn).
 """
 
 import os
@@ -10,9 +10,13 @@ import time
 import json
 import logging
 import threading
-import subprocess
 import requests
 from flask import Flask, request, jsonify
+
+# Silenciar logs HTTP de health checks
+logging.getLogger("werkzeug").setLevel(logging.CRITICAL)
+logging.getLogger("gunicorn.access").setLevel(logging.CRITICAL)
+logging.getLogger("gunicorn.error").setLevel(logging.CRITICAL)
 
 # Configuración de Logging
 logging.basicConfig(
@@ -25,29 +29,38 @@ logger = logging.getLogger(__name__)
 # Inicializar Flask
 app = Flask(__name__)
 
-# Token de Telegram desde variables de entorno
 TELEGRAM_TOKEN = os.environ.get('TELEGRAM_TOKEN')
+
+# ==============================================================
+#  HEARTBEAT INTERNO (keep-alive sin cron-job)
+# ==============================================================
+def _self_heartbeat():
+    port = os.environ.get('PORT', '5000')
+    url = f"http://localhost:{port}/health"
+    while True:
+        time.sleep(240)
+        try:
+            requests.get(url, timeout=10)
+        except Exception:
+            pass
 
 # ==============================================================
 #  RUTAS DEL SERVIDOR WEB (FLASK)
 # ==============================================================
 @app.route('/')
 def index():
-    """Ping básico — Render lo usa para verificar que el servicio responde."""
-    return "✅ Combined Strategy Bot + Render — en línea.", 200
+    return "✅ Bot Abracadabra + Render — en línea.", 200
 
 @app.route('/health', methods=['GET'])
 def health_check():
-    """Health Check Path para Render."""
     return jsonify({
         "status": "running",
         "timestamp": time.time(),
-        "bot": "combined_strategy"
+        "bot": "abracadabra"
     }), 200
 
 @app.route('/webhook', methods=['POST'])
 def telegram_webhook():
-    """Recibe updates de Telegram vía webhook (POST JSON)."""
     if request.is_json:
         update = request.get_json()
         logger.info(f"📩 Telegram update: {json.dumps(update)}")
@@ -58,7 +71,6 @@ def telegram_webhook():
 #  CONFIGURACIÓN DE WEBHOOK
 # ==============================================================
 def setup_telegram_webhook():
-    """Configura el webhook de Telegram usando RENDER_EXTERNAL_URL."""
     if not TELEGRAM_TOKEN:
         logger.warning("No hay TELEGRAM_TOKEN configurado.")
         return
@@ -85,35 +97,28 @@ def setup_telegram_webhook():
         logger.error(f"❌ Excepción al configurar webhook: {e}")
 
 # ==============================================================
-#  LANZADOR DEL BOT (SUBPROCESO)
+#  LANZADOR DEL BOT (DIRECTO EN THREAD)
 # ==============================================================
 def run_bot():
-    """Ejecuta combined_strategy_bot.py en un proceso separado en background. 
-    Se reinicia automáticamente si se cae."""
-    # Apunta exclusivamente a tu nueva Súper Estrategia
-    script_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "combined_strategy_bot.py")
-    
-    if not os.path.exists(script_path):
-        logger.error(f"❌ Archivo no encontrado: {script_path}")
-        return
+    """Importa y ejecuta botabracadabra.main() con autoreinicio."""
+    import botabracadabra
 
     while True:
-        logger.info(f"🚀 Iniciando {script_path} en background...")
+        logger.info("🚀 Iniciando botabracadabra.main() ...")
         try:
-            # Ejecutamos el bot en un proceso hijo. 
-            # Omitimos stdout/stderr explícitos para heredar los de Flask/Render correctamente.
-            process = subprocess.Popen([sys.executable, script_path])
-            
-            # Esperamos a que el proceso termine
-            process.wait()
-            logger.error("❌ El proceso de combined_strategy_bot.py ha terminado inesperadamente. Reiniciando en 10 segundos...")
+            botabracadabra.main()
         except Exception as e:
-            logger.error(f"❌ Error al intentar ejecutar combined_strategy_bot.py: {e}")
-            
+            logger.error(f"❌ botabracadabra.main() terminó con error: {e}")
+        logger.info("♻️ Reiniciando bot en 10 segundos...")
         time.sleep(10)
 
-# Iniciar el hilo del bot automáticamente (compatible con Gunicorn en Render)
-bot_thread = threading.Thread(target=run_bot, daemon=True)
+# Iniciar heartbeat interno
+heartbeat_thread = threading.Thread(target=_self_heartbeat, daemon=True, name="Heartbeat")
+heartbeat_thread.start()
+logger.info("Heartbeat thread started (interval=4min)")
+
+# Iniciar el hilo del bot automáticamente (compatible con Gunicorn)
+bot_thread = threading.Thread(target=run_bot, daemon=True, name="BotRunner")
 bot_thread.start()
 
 # ==============================================================
